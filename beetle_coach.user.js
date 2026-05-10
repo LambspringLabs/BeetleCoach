@@ -1,15 +1,15 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.16
+// @version      12.4.17
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_notification
 // @run-at       document-start
-// @updateURL    https://raw.githubusercontent.com/MeridianAnalytics/BeetleCoach/master/beetle_coach.user.js
-// @downloadURL  https://raw.githubusercontent.com/MeridianAnalytics/BeetleCoach/master/beetle_coach.user.js
+// @updateURL    https://raw.githubusercontent.com/LambspringLabs/BeetleCoach/master/beetle_coach.user.js
+// @downloadURL  https://raw.githubusercontent.com/LambspringLabs/BeetleCoach/master/beetle_coach.user.js
 // ==/UserScript==
 
 (function () {
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.16';
+  var VER = '12.4.17';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -423,9 +423,14 @@
       merge(scanPage('.beetle-catch-module__beetle-item','.beetle-catch-module__beetle-img','.beetle-catch-module__beetle-item-count'));
       for (var j = 0; j < 20; j++) { var more2 = document.querySelector('.beetle-catch-module__pagination-button'); if (!more2 || more2.disabled || more2.classList.contains('disabled')) break; more2.click(); await new Promise(function(r){setTimeout(r,200);}); var page2 = scanPage('.beetle-catch-module__beetle-item','.beetle-catch-module__beetle-img','.beetle-catch-module__beetle-item-count'); var fp2 = fingerprint(page2.items); if (seenFP2[fp2]) break; seenFP2[fp2] = true; merge(page2); }
       if (Object.keys(merged).length > 0) {
+        // First-population scan (post-Reset or first ever): we have no
+        // baseline to diff against, so every item would look "new" and
+        // dump 191 ladybugs into session.gains as if just caught. Log
+        // the populate but don't credit gains on this pass.
+        var firstPopulation = Object.keys(oldInv).length === 0;
         S.mergedInventory = merged;
         var changes = [];
-        for (var k in merged) { var old = oldInv[k]||0; if (merged[k] > old && !JUNK_SET.has(k) && k !== 'cheese') { changes.push(dn(k)+' +'+(merged[k]-old)); if (ALL_BEETLES.indexOf(k) > -1 && k !== 'green') for (var bi = 0; bi < merged[k]-old; bi++) S.session.gains.push(dn(k)); } }
+        for (var k in merged) { var old = oldInv[k]||0; if (merged[k] > old && !JUNK_SET.has(k) && k !== 'cheese') { changes.push(dn(k)+' +'+(merged[k]-old)); if (!firstPopulation && ALL_BEETLES.indexOf(k) > -1 && k !== 'green') for (var bi = 0; bi < merged[k]-old; bi++) S.session.gains.push(dn(k)); } }
         var jd = cnt(merged,ANY_JUNK) - cnt(oldInv,ANY_JUNK); if (jd > 0) changes.push('Junk +'+jd);
         var cd = (merged.cheese||0) - (oldInv.cheese||0); if (cd !== 0) changes.push('Cheese '+(cd>0?'+':'')+cd);
         logEvent('Scan: '+(changes.length ? changes.join(', ') : 'no changes')+(totalUnresolved ? ' ('+totalUnresolved+' unresolved)' : ''));
@@ -1102,20 +1107,33 @@
   }
 
   // CLAIMING / CLAIMING_CHEESE: wait for action to complete, then return to IDLE
+  // Schedule a post-claim fullScan so newly-caught beetles (esp. rare
+  // drops like Golden Scarab) appear in inventory and Next-Moves callouts
+  // immediately, not on the next 2-min STALE_MS tick.
+  function schedulePostClaimScan(delayMs) {
+    setTimeout(function() {
+      if (S.machineState === 'IDLE' && onBeetle() && tabVisible() && !_scanning) {
+        transition('SCANNING');
+        fullScan().then(function() { transition('IDLE'); });
+      }
+    }, delayMs || 5000);
+  }
   function handleActionWait() {
     if (stateAge() > ACTION_TIMEOUT) {
+      var wasClaiming = S.machineState === 'CLAIMING';
       // After cheese claim, return to beetle
       if (S.machineState === 'CLAIMING_CHEESE' && currentCartridge() === 'cheese') {
         ensureCartridge('beetle','return after cheese');
       }
       transition('IDLE');
+      if (wasClaiming) schedulePostClaimScan();
       return;
     }
     // Early return to IDLE if buttons are no longer processing
     if (stateAge() > 5000) {
       if (S.machineState === 'CLAIMING') {
         var cb = document.querySelector('.beetle-catch-module__catch-button');
-        if (cb && !/processing|loading/i.test(cb.textContent||'')) { transition('IDLE'); return; }
+        if (cb && !/processing|loading/i.test(cb.textContent||'')) { transition('IDLE'); schedulePostClaimScan(); return; }
       }
       if (S.machineState === 'CLAIMING_CHEESE' && stateAge() > 10000) {
         // After cheese, navigate back to beetle
