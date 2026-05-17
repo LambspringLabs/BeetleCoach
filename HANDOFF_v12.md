@@ -1,6 +1,40 @@
 # BeetleCoach v12 Refactor Handoff
 
-_Written 2026-04-12 for Claude/Codex sessions continuing this work._
+_Originally written 2026-04-12 for the v11 → v12 refactor. Epilogue added 2026-05-17 (v12.4.20)._
+
+> **⚡ 2026-05-17 (v12.4.20) update — read this banner first.**
+>
+> The architecture below is still accurate. The state machine, scan loop, login flow, eject recovery, and tick cadence (10 s) are unchanged. **However**, the data tables (`LABELS`, `ALL_BEETLES`, `ALL_FLOWERS`, `ITEM_ALIASES`, `ANY_JUNK`, `RECIPES`, `HAMMER_STATS`) were fully resynced with `beetle.wiki` because the game shipped a Christmas Crafting Update we missed. Several recipe rows are also gone (`Monarch (alt)`, `Goliath Beetle (alt)`, `Bombardier Beetle (alt)` — wiki-unverified substitutions). `MULTI_OUTPUT_RECIPES` was added so the panel can annotate RNG-output recipes with `(random sibling)`. `isProtected()` was extended to cover `fringed_iris`, `larkspur`, and `passionflower`.
+>
+> **Doc index for new contributors / future AI sessions** (read in this order if you're cold):
+>
+> | File | Read for |
+> |---|---|
+> | [`OPERATING_MANUAL.md`](./OPERATING_MANUAL.md) | How the script behaves at runtime; how a user actually uses the panel; pause workflow; troubleshooting |
+> | This file (`HANDOFF_v12.md`) | Architecture, data model, design decisions, what NOT to automate |
+> | [`WIKI_AUDIT.md`](./WIKI_AUDIT.md) | Game-mechanics ground truth (recipes, anti-recipes, hammers, trinkets, trophies) as of 2026-05-17 |
+> | [`RECIPE_AUDIT.md`](./RECIPE_AUDIT.md) | Independent verification pass over the 40 active recipes in `RECIPES[]` against the wiki |
+> | [`REVIEW_FINDINGS.md`](./REVIEW_FINDINGS.md) | The 2026-05-17 audit + fix plan that drove v12.4.18–v12.4.20 |
+> | [`beetle_known_recipes_human_readable.md`](./beetle_known_recipes_human_readable.md) | Older recipe reference; first ~80 lines are the v12.4.18 delta block, rest is historical 2026-04-07 baseline |
+> | [`beetleboy_knowledge_base.md`](./beetleboy_knowledge_base.md) | Older game knowledge base; cross-check against `WIKI_AUDIT.md` for current facts |
+> | [`beetleboy_value_model.md`](./beetleboy_value_model.md) | Item-value math, EV reasoning for hammer choice |
+>
+> **What's in the script post-v12.4.20 that this doc doesn't yet describe:**
+>
+> - `MULTI_OUTPUT_RECIPES` set (next to `FLOWER_CONSUMING`) — recipes that yield ONE OF several siblings. The renderPanel goal-block uses this to annotate `(random sibling)` so the user doesn't read a transmute or bridge as deterministic.
+> - `HAMMER_STATS[k].postFirstBreak` — Adamantine 5%, Diamond 9% (wiki documents these post-first-use bumps). Not yet surfaced in the strip display.
+> - `S._lastUnresolved` — used by `fullScan` to gate the "X unresolved" log line so it fires only when the count changes (suppresses spam).
+> - `isProtected()` now covers `fringed_iris`, `larkspur`, `passionflower` (closes gap where Mithril Pollen / Adamantine Pollen crafts could consume the last copy of an input needed for the new special-beetle smashes).
+> - `RECIPES[]` rows REMOVED in v12.4.20: `Monarch (alt)`, `Goliath Beetle (alt)`, `Bombardier Beetle (alt)`. Wiki shows only "+ Ladybug" / "+ Pond" canonically. Stag had no alt, so this also restored internal consistency.
+> - `RECIPES[]` rows ADDED in v12.4.18: `Black-Spotted Blue Longicorn`, `Golden-Spotted Tiger Beetle`, `Blue Death Feigning Beetle`, `Tin Flower Transmute`. Transmutes rewritten to wiki-canonical 2-input form (single beetle + Junk Cube, no "green +" prefix).
+> - `ITEM_ALIASES`: `golden → golden_scarab` (the game files Golden Scarab as `golden.png`; without this alias, the script reported the user's Golden Scarab as Missing).
+> - `ANY_JUNK` grew 27 → 45 items per the wiki itemtag_docs.
+> - Pagination delay in `fullScan` bumped 200 ms → 600 ms (was missing pages on slow React commits, causing stale `stag` entries to linger in `S.mergedInventory`).
+> - `fullScan` log line gated on `(changes.length || totalUnresolved !== S._lastUnresolved)` — no more "Scan: no changes" spam.
+>
+> **Open questions still on the board after v12.4.20:** Hercules Beetle recipe (off-wiki, retained pending user investigation), Trinkets + Trophies entire domain (not yet modeled), Specimen Pin recipe (unknown), Bumblebee recipe (unknown), holiday beetles (Black Widow / Candycane Tiger Moth — wiki pages empty), surfacing post-first-use break in the hammer strip, surfacing the daily 0%-break smash window.
+
+---
 
 ## What This Is
 
