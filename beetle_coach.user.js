@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.17
+// @version      12.4.20
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.17';
+  var VER = '12.4.20';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -50,32 +50,52 @@
      2. DATA TABLES
      ═══════════════════════════════════════════════════════ */
   var LABELS = {
+    // Beetles (per beetle.wiki itemtag_docs)
     green:'Green Beetle',ladybug:'Ladybug',purple:'Purple Beetle',pond:'Pond Beetle',
     monarch:'Monarch',goliath:'Goliath Beetle',stag:'Stag Beetle',bombardier:'Bombardier Beetle',
     giraffe_weevil:'Giraffe Weevil',pillbug:'Pillbug',imperial_tortoise:'Imperial Tortoise Beetle',
     sabertooth_longhorn:'Sabertooth Longhorn Beetle',sunset_moth:'Sunset Moth',
     mars_rhino:'Mars Rhino Beetle',golden_scarab:'Golden Scarab',hercules:'Hercules Beetle',
     skull:'Skull Beetle',christmas:'Christmas Beetle',
+    // v12.4.18: Christmas-update / post-April-2026 beetles
+    cucumber:'Striped Cucumber Beetle',bumblebee:'Bumblebee',
+    blue_longicorn:'Black-Spotted Blue Longicorn',golden_tiger:'Golden-Spotted Tiger Beetle',
+    death_feigning:'Blue Death Feigning Beetle',
+    // Flowers
     daisy:'Daisy',poppy:'Poppy',sunflower:'Sunflower',marigold:'Marigold',
     gallic_rose:'Gallic Rose',milk_thistle:'Milk Thistle',royal_poinciana:'Royal Poinciana',
     camellia:'Camellia',morning_glory:'Morning Glory',pincushion:'Pincushion',gazania:'Gazania',
     black_lotus:'Black Lotus',
+    // v12.4.18: new flowers
+    carnation:'Chinese Pink Carnation',snapdragon:'Common Snapdragon',petunia:'Large White Petunia',
+    st_johns_wort:"Spotted St. John's Wort",magnolia:'Southern Magnolia',
+    fringed_iris:'Fringed Iris',larkspur:'Two-spike Larkspur',
+    passionflower:'Purple Passionflower',
+    // Artifacts (5 original + Specimen Pin added v12.4.18)
     nectar:'Nectar',cattail:'Cattail',pinecone:'Pinecone',moss:'Moss',gunpowder:'Gunpowder',
+    specimen_pin:'Specimen Pin',
     junk_cube_t1:'Junk Cube',junk_cube_t2:'Junk Tesseract',beetleboy_key:'BeetleBoy Key',
     pollen_tin:'Tin Pollen',pollen_bronze:'Bronze Pollen',pollen_mithril:'Mithril Pollen',
     pollen_adamantine:'Adamantine Pollen',
     cheese:'Cheese',
     hammer_t1:'Tin Hammer',hammer_t2:'Bronze Hammer',hammer_t3:'Mithril Hammer',
     hammer_t4:'Adamantine Hammer',hammer_t5:'Diamond Hammer',
-    coffee_can:'Coffee Can',red_whistle:'Red Whistle',cracker_wrapper:'Cracker Wrapper',
-    stamp:'Stamp',marble:'Marble',bottle_cap:'Bottle Cap',ramune_bottle:'Ramune Bottle',
-    wine_cork:'Wine Cork',green_army_man:'Green Army Man',scratch_off:'Scratch Off',
-    cigarette_butt:'Cigarette Butt',train_ticket_stub:'Train Ticket Stub',chip_bag:'Chip Bag',
-    chocolate_wrapper:'Chocolate Wrapper',jack_adapter:'Jack Adapter',paperclip:'Paperclip',
-    pebble:'Pebble',soda_can_tab:'Soda Can Tab',chocolate_bar:'Chocolate Bar',
-    empty_noodle_cup:'Empty Noodle Cup',juicebox:'Juicebox',smiley_pebble:'Smiley Pebble',
-    watch_battery:'Watch Battery',bike_reflector:'Bike Reflector',pokkiri_box:'Pokkiri Box',
-    rubber_band:'Rubber Band',gum_wrapper:'Gum Wrapper'
+    // Junk items (full 45-item list per wiki itemtag_docs)
+    ballpoint_pen:'Ballpoint Pen',bendy_straw:'Bendy Straw',bike_reflector:'Bike Reflector',
+    bottle_cap:'Bottle Cap',broken_firework:'Broken Firework',burger_wrapper:'Burger Wrapper',
+    button:'Button',chewed_eraser:'Chewed Eraser',chip_bag:'Chip Bag',
+    chocolate_bar:'Chocolate Bar',chocolate_wrapper:'Chocolate Wrapper',cigarette_butt:'Cigarette Butt',
+    coffee_can:'Coffee Can',cracker_wrapper:'Cracker Wrapper',deodorant_can:'Deodorant Can',
+    empty_noodle_cup:'Empty Noodle Cup',event_band:'Event Band',glue_stick:'Glue Stick',
+    green_army_man:'Green Army Man',grenade_pin:'Grenade Pin',guitar_pick:'Guitar Pick',
+    gum_wrapper:'Gum Wrapper',headphones_90s:'90s Headphones',jack_adapter:'Jack Adapter',
+    juicebox:'Juice Box',marble:'Marble',matchbook:'Matchbook',origami_crane:'Origami Crane',
+    paperclip:'Paperclip',pebble:'Pebble',pill_bottle:'Empty Pill Bottle',pokkiri_box:'Pokkiri Box',
+    ramune_bottle:'Ramune Bottle',red_whistle:'Red Whistle',rubber_band:'Rubber Band',
+    salt_pepper_packet:'Salt & Pepper Packet',scratch_off:'Scratch Off',sim_card:'SIM Card',
+    smiley_pebble:'Smiley Pebble',soda_can_tab:'Soda Can Tab',stamp:'Stamp',
+    train_ticket_stub:'Train Ticket Stub',watch_battery:'Watch Battery',wine_cork:'Wine Cork',
+    wristband:'Plastic Wristband'
   };
 
   var TIER_MAP = {
@@ -85,12 +105,22 @@
     sabertooth_longhorn:'Epic',sunset_moth:'Epic',
     mars_rhino:'Legendary',golden_scarab:'Legendary',hercules:'Legendary',
     skull:'Uncommon',christmas:'Special',
+    // v12.4.18: new beetles
+    cucumber:'Bronze',bumblebee:'Rare',
+    blue_longicorn:'Rare',golden_tiger:'Rare',
+    death_feigning:'Epic',
     daisy:'Tin',poppy:'Tin',sunflower:'Tin',
     marigold:'Bronze',gallic_rose:'Bronze',milk_thistle:'Bronze',
     royal_poinciana:'Mithril',camellia:'Mithril',morning_glory:'Mithril',
     pincushion:'Adamantine',gazania:'Adamantine',black_lotus:'Legendary',
+    // v12.4.18: new flowers
+    carnation:'Tin',snapdragon:'Tin',petunia:'Tin',
+    st_johns_wort:'Bronze',magnolia:'Bronze',
+    fringed_iris:'Mithril',larkspur:'Mithril',
+    passionflower:'Adamantine',
     pollen_tin:'Tin',pollen_bronze:'Bronze',pollen_mithril:'Mithril',pollen_adamantine:'Adamantine',
-    nectar:'Bridge',cattail:'Bridge',pinecone:'Bridge',moss:'Bridge',gunpowder:'Bridge'
+    nectar:'Bridge',cattail:'Bridge',pinecone:'Bridge',moss:'Bridge',gunpowder:'Bridge',
+    specimen_pin:'Bridge'
   };
   var TIER_COLORS = {
     Tin:'#7a8a7a',Bronze:'#b87333',Mithril:'#5b8dd9',Adamantine:'#9b59b6',
@@ -108,22 +138,43 @@
     imperial_tortoise_beetle:'imperial_tortoise',sabertooth_longhorn_beetle:'sabertooth_longhorn',
     mars_rhino_beetle:'mars_rhino',hercules_beetle:'hercules',
     gallicrose:'gallic_rose',royalpoinciana:'royal_poinciana',
-    morningglory:'morning_glory',milkthistle:'milk_thistle',blacklotus:'black_lotus'
+    morningglory:'morning_glory',milkthistle:'milk_thistle',blacklotus:'black_lotus',
+    // v12.4.18: game uses 'golden.png' for Golden Scarab — must alias for collection detection.
+    golden:'golden_scarab',goldenscarab:'golden_scarab',
+    // v12.4.18: itemtag uses 'death_feigning' for Blue Death Feigning Beetle.
+    blue_death_feigning:'death_feigning',blue_death_feigning_beetle:'death_feigning',
+    striped_cucumber:'cucumber',striped_cucumber_beetle:'cucumber',
+    black_spotted_blue_longicorn:'blue_longicorn',golden_spotted_tiger:'golden_tiger',
+    golden_spotted_tiger_beetle:'golden_tiger',
+    chinese_pink_carnation:'carnation',common_snapdragon:'snapdragon',
+    large_white_petunia:'petunia',spotted_st_johns_wort:'st_johns_wort',
+    southern_magnolia:'magnolia',two_spike_larkspur:'larkspur',
+    purple_passionflower:'passionflower'
   };
 
-  var TIN_FLOWERS = ['daisy','poppy','sunflower'];
-  var BRONZE_FLOWERS = ['marigold','gallic_rose','milk_thistle'];
-  var MITHRIL_FLOWERS = ['royal_poinciana','camellia','morning_glory'];
-  var ADAMANTINE_FLOWERS = ['pincushion','gazania'];
+  // v12.4.18: flower lists updated per beetle.wiki itemtag_docs.
+  var TIN_FLOWERS = ['daisy','poppy','sunflower','carnation','snapdragon','petunia'];
+  var BRONZE_FLOWERS = ['marigold','gallic_rose','milk_thistle','st_johns_wort','magnolia'];
+  var MITHRIL_FLOWERS = ['royal_poinciana','camellia','morning_glory','fringed_iris','larkspur'];
+  var ADAMANTINE_FLOWERS = ['pincushion','gazania','passionflower'];
+  // BRONZE_BEETLES / MITHRIL_BEETLES intentionally exclude cucumber / bumblebee:
+  // wiki: "Special beetles like Striped Cucumber Beetle and Bumblebee cannot be
+  // transmuted into flowers." Likely they also can't be used in bridge recipes
+  // (unverified). Keep them out until in-game testing confirms otherwise.
   var BRONZE_BEETLES = ['ladybug','purple'];
   var MITHRIL_BEETLES = ['pond','monarch'];
   var ADAMANTINE_BEETLES = ['goliath','stag','bombardier'];
+  // v12.4.18: junk list updated per beetle.wiki itemtag_docs (45 items, was 27).
   var ANY_JUNK = [
-    'coffee_can','red_whistle','cracker_wrapper','stamp','marble','bottle_cap',
-    'ramune_bottle','wine_cork','green_army_man','scratch_off','cigarette_butt',
-    'train_ticket_stub','chip_bag','chocolate_wrapper','jack_adapter','paperclip',
-    'pebble','soda_can_tab','chocolate_bar','empty_noodle_cup','juicebox',
-    'smiley_pebble','watch_battery','bike_reflector','pokkiri_box','rubber_band','gum_wrapper'
+    'ballpoint_pen','bendy_straw','bike_reflector','bottle_cap','broken_firework',
+    'burger_wrapper','button','chewed_eraser','chip_bag','chocolate_bar',
+    'chocolate_wrapper','cigarette_butt','coffee_can','cracker_wrapper','deodorant_can',
+    'empty_noodle_cup','event_band','glue_stick','green_army_man','grenade_pin',
+    'guitar_pick','gum_wrapper','headphones_90s','jack_adapter','juicebox',
+    'marble','matchbook','origami_crane','paperclip','pebble',
+    'pill_bottle','pokkiri_box','ramune_bottle','red_whistle','rubber_band',
+    'salt_pepper_packet','scratch_off','sim_card','smiley_pebble','soda_can_tab',
+    'stamp','train_ticket_stub','watch_battery','wine_cork','wristband'
   ];
   var JUNK_SET = new Set(ANY_JUNK);
   var SKIP_DISPLAY = new Set(['hammer_t1','hammer_t2','hammer_t3','hammer_t4','hammer_t5','beetleboy_key']);
@@ -134,21 +185,34 @@
     any_adamantine_beetle:ADAMANTINE_BEETLES
   };
   var HAMMER_TIERS = ['hammer_t1','hammer_t2','hammer_t3','hammer_t4','hammer_t5'];
+  // v12.4.18: postFirstBreak captures the wiki's documented post-first-use bump
+  // for Adamantine (2% → 5%) and Diamond (1% → 9%). Display still uses baseBreak
+  // for backwards compatibility; future EV logic can read postFirstBreak.
   var HAMMER_STATS = {
-    hammer_t1:{bonus:0,baseBreak:10},hammer_t2:{bonus:5,baseBreak:5},
-    hammer_t3:{bonus:20,baseBreak:10},hammer_t4:{bonus:35,baseBreak:2},
-    hammer_t5:{bonus:90,baseBreak:1}
+    hammer_t1:{bonus:0,baseBreak:10,postFirstBreak:10},
+    hammer_t2:{bonus:5,baseBreak:5,postFirstBreak:5},
+    hammer_t3:{bonus:20,baseBreak:10,postFirstBreak:10},
+    hammer_t4:{bonus:35,baseBreak:2,postFirstBreak:5},
+    hammer_t5:{bonus:90,baseBreak:1,postFirstBreak:9}
   };
   var HAMMER_RECIPE_KEY = {
     'Tin Hammer':'hammer_t1','Bronze Hammer':'hammer_t2','Mithril Hammer':'hammer_t3',
     'Adamantine Hammer':'hammer_t4','Diamond Hammer':'hammer_t5'
   };
 
+  // v12.4.18: collection vocabulary expanded.
+  // Black Widow / Candycane Tiger Moth (Diamond holiday drops) intentionally
+  // omitted — wiki pages are empty and they're only catchable during seasonal
+  // windows, so flagging them as "missing" year-round would be noise. Add them
+  // when wiki confirms drop windows / recipes.
   var ALL_BEETLES = ['green','ladybug','purple','pond','monarch','goliath','stag','bombardier',
     'giraffe_weevil','pillbug','imperial_tortoise','sabertooth_longhorn','sunset_moth',
-    'mars_rhino','golden_scarab','hercules','skull','christmas'];
+    'mars_rhino','golden_scarab','hercules','skull','christmas',
+    'cucumber','bumblebee','blue_longicorn','golden_tiger','death_feigning'];
   var ALL_FLOWERS = ['daisy','poppy','sunflower','marigold','gallic_rose','milk_thistle',
-    'royal_poinciana','camellia','morning_glory','pincushion','gazania','black_lotus'];
+    'royal_poinciana','camellia','morning_glory','pincushion','gazania','black_lotus',
+    'carnation','snapdragon','petunia','st_johns_wort','magnolia',
+    'fringed_iris','larkspur','passionflower'];
   var COLLECTIBLES = new Set([].concat(ALL_BEETLES, ALL_FLOWERS));
 
   var RECIPES = [
@@ -167,12 +231,16 @@
     {label:'Pinecone / Moss / Gunpowder Bridge',type:'smash',inputs:['any_mithril_beetle','pollen_mithril']},
     {label:'Pond Beetle',type:'smash',inputs:['cattail','ladybug']},
     {label:'Monarch',type:'smash',inputs:['nectar','ladybug']},
-    {label:'Monarch (alt)',type:'smash',inputs:['nectar','purple']},
+    // v12.4.20: removed Monarch (alt) [nectar+purple], Bombardier (alt)
+    // [gunpowder+monarch], and Goliath (alt) [pinecone+monarch]. Per WIKI_AUDIT
+    // section A.2 these substitutions are wiki-ambiguous (the recipes table
+    // shows only "+ Ladybug" / "+ Pond"). User priority: never recommend an
+    // unverified craft. They can still be crafted manually if the user wants
+    // to test in-game. Stag has no (alt), so removal also restores internal
+    // consistency among the three Adamantine artifact-craft beetles.
     {label:'Bombardier Beetle',type:'smash',inputs:['gunpowder','pond']},
-    {label:'Bombardier Beetle (alt)',type:'smash',inputs:['gunpowder','monarch']},
     {label:'Stag Beetle',type:'smash',inputs:['moss','pond']},
     {label:'Goliath Beetle',type:'smash',inputs:['pinecone','pond']},
-    {label:'Goliath Beetle (alt)',type:'smash',inputs:['pinecone','monarch']},
     {label:'Giraffe Weevil',type:'smash',inputs:['royal_poinciana','pond']},
     {label:'Giraffe Weevil (alt)',type:'smash',inputs:['royal_poinciana','monarch']},
     {label:'Pillbug',type:'smash',inputs:['camellia','pond']},
@@ -188,34 +256,55 @@
     {label:'Black Lotus',type:'smash',inputs:['gunpowder','moss','pinecone']},
     {label:'Mars Rhino Beetle',type:'smash',inputs:['black_lotus','sunset_moth','sabertooth_longhorn']},
     {label:'Hercules Beetle',type:'smash',inputs:['golden_scarab','pollen_adamantine','purple']},
-    {label:'Bronze Flower Transmute',type:'smash',inputs:['green','purple','junk_cube_t1']},
-    {label:'Mithril Flower Transmute',type:'smash',inputs:['green','any_mithril_beetle','junk_cube_t1']},
-    {label:'Adamantine Flower Transmute',type:'smash',inputs:['green','any_adamantine_beetle','junk_cube_t1']}
+    // v12.4.18: New special-beetle smashes per beetle.wiki crafted_items page.
+    {label:'Black-Spotted Blue Longicorn',type:'smash',inputs:['fringed_iris','any_mithril_beetle']},
+    {label:'Golden-Spotted Tiger Beetle',type:'smash',inputs:['larkspur','any_mithril_beetle']},
+    {label:'Blue Death Feigning Beetle',type:'smash',inputs:['passionflower','any_adamantine_beetle']},
+    // v12.4.18: Transmute recipes rewritten to wiki-canonical 2-input form
+    // (single beetle + Junk Cube → same-tier flower). Pre-v12.4.18 recipes used
+    // a 3-input form (green + beetle + junk_cube) sourced from chat folklore
+    // that the wiki does not document. The 2-input form is what
+    // beetle.wiki/doku.php?id=crafted_items shows. Cucumber and Bumblebee are
+    // excluded from any_bronze_beetle / any_mithril_beetle because the wiki
+    // explicitly says "Special beetles like Striped Cucumber Beetle and
+    // Bumblebee cannot be transmuted into flowers."
+    {label:'Tin Flower Transmute',type:'smash',inputs:['green','junk_cube_t1']},
+    {label:'Bronze Flower Transmute',type:'smash',inputs:['any_bronze_beetle','junk_cube_t1']},
+    {label:'Mithril Flower Transmute',type:'smash',inputs:['any_mithril_beetle','junk_cube_t1']},
+    {label:'Adamantine Flower Transmute',type:'smash',inputs:['any_adamantine_beetle','junk_cube_t1']}
   ];
   var RECIPE_VALUE = {
     'Hercules Beetle':100,'Mars Rhino Beetle':95,'Black Lotus':88,'Diamond Hammer':82,
     'Sabertooth Longhorn Beetle':78,'Sunset Moth':78,'Sabertooth Longhorn (Stag)':78,'Sabertooth Longhorn (Bomb)':78,
     'Sunset Moth (Stag)':78,'Sunset Moth (Bomb)':78,'Adamantine Pollen':75,'Adamantine Hammer':65,
-    'Goliath Beetle':60,'Goliath Beetle (alt)':60,'Stag Beetle':60,
-    'Bombardier Beetle':55,'Bombardier Beetle (alt)':55,
+    // v12.4.18: new special-beetle recipes
+    'Blue Death Feigning Beetle':78,
+    'Black-Spotted Blue Longicorn':60,'Golden-Spotted Tiger Beetle':60,
+    'Goliath Beetle':60,'Stag Beetle':60,
+    'Bombardier Beetle':55,
     'Giraffe Weevil':55,'Giraffe Weevil (alt)':55,'Pillbug':55,'Pillbug (alt)':55,
     'Imperial Tortoise Beetle':55,'Imperial Tortoise Beetle (alt)':55,
     'Pinecone / Moss / Gunpowder Bridge':50,'Nectar / Cattail Bridge':40,'Mithril Pollen':40,
-    'Mithril Hammer':30,'Pond Beetle':25,'Monarch':25,'Monarch (alt)':25,
-    'Bronze Hammer':15,'Bronze Pollen':12,'Bronze Flower Transmute':10,'Mithril Flower Transmute':35,
+    'Mithril Hammer':30,'Pond Beetle':25,'Monarch':25,
+    'Bronze Hammer':15,'Bronze Pollen':12,
+    'Tin Flower Transmute':4,'Bronze Flower Transmute':10,'Mithril Flower Transmute':35,
     'Adamantine Flower Transmute':55,
     'Junk Tesseract':8,'Tin Hammer':6,'Tin Pollen':5,'Junk Cube':1
   };
   var RECIPE_OUTPUT = {
-    'Pond Beetle':'pond','Monarch':'monarch','Monarch (alt)':'monarch',
-    'Goliath Beetle':'goliath','Goliath Beetle (alt)':'goliath',
-    'Stag Beetle':'stag','Bombardier Beetle':'bombardier','Bombardier Beetle (alt)':'bombardier',
+    'Pond Beetle':'pond','Monarch':'monarch',
+    'Goliath Beetle':'goliath',
+    'Stag Beetle':'stag','Bombardier Beetle':'bombardier',
     'Giraffe Weevil':'giraffe_weevil','Giraffe Weevil (alt)':'giraffe_weevil',
     'Pillbug':'pillbug','Pillbug (alt)':'pillbug',
     'Imperial Tortoise Beetle':'imperial_tortoise','Imperial Tortoise Beetle (alt)':'imperial_tortoise',
     'Sabertooth Longhorn Beetle':'sabertooth_longhorn','Sabertooth Longhorn (Stag)':'sabertooth_longhorn','Sabertooth Longhorn (Bomb)':'sabertooth_longhorn',
     'Sunset Moth':'sunset_moth','Sunset Moth (Stag)':'sunset_moth','Sunset Moth (Bomb)':'sunset_moth',
-    'Mars Rhino Beetle':'mars_rhino','Hercules Beetle':'hercules','Black Lotus':'black_lotus'
+    'Mars Rhino Beetle':'mars_rhino','Hercules Beetle':'hercules','Black Lotus':'black_lotus',
+    // v12.4.18: new special-beetle recipe outputs
+    'Black-Spotted Blue Longicorn':'blue_longicorn',
+    'Golden-Spotted Tiger Beetle':'golden_tiger',
+    'Blue Death Feigning Beetle':'death_feigning'
   };
   var NEEDED_AS_INGREDIENT = new Set(['sabertooth_longhorn','sunset_moth','black_lotus']);
 
@@ -225,8 +314,10 @@
     'nectar':['Nectar / Cattail Bridge'],'cattail':['Nectar / Cattail Bridge'],
     'pollen_tin':['Tin Pollen'],'pollen_bronze':['Bronze Pollen'],
     'pollen_mithril':['Mithril Pollen'],'pollen_adamantine':['Adamantine Pollen'],
+    // v12.4.18: passionflower needed for Blue Death Feigning
     'gazania':['Adamantine Flower Transmute'],'pincushion':['Adamantine Flower Transmute'],
-    'any_adamantine_beetle':['Goliath Beetle','Goliath Beetle (alt)','Stag Beetle','Bombardier Beetle','Bombardier Beetle (alt)'],
+    'passionflower':['Adamantine Flower Transmute'],
+    'any_adamantine_beetle':['Goliath Beetle','Stag Beetle','Bombardier Beetle'],
     'junk_cube_t1':['Junk Cube'],'junk_cube_t2':['Junk Tesseract']
   };
 
@@ -251,8 +342,8 @@
     {key:'goliath',recipe:'Goliath Beetle',prereqs:['pinecone'],via:'Mithril Bridge for Pinecone'},
     {key:'stag',recipe:'Stag Beetle',prereqs:['moss'],via:'Mithril Bridge for Moss'},
     {key:'bombardier',recipe:'Bombardier Beetle',prereqs:['gunpowder'],via:'Mithril Bridge for Gunpowder'},
-    {key:'gazania',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Green + Adamantine beetle + Junk Cube'},
-    {key:'pincushion',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Green + Adamantine beetle + Junk Cube'},
+    {key:'gazania',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Adamantine beetle + Junk Cube (random Adamantine flower)'},
+    {key:'pincushion',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Adamantine beetle + Junk Cube (random Adamantine flower)'},
     {key:'black_lotus',recipe:'Black Lotus',prereqs:['gunpowder','moss','pinecone'],via:'All 3 Mithril artifacts'},
     {key:'sabertooth_longhorn',recipe:'Sabertooth Longhorn Beetle',prereqs:['pincushion','any_adamantine_beetle'],via:'Pincushion + Adamantine beetle'},
     {key:'sunset_moth',recipe:'Sunset Moth',prereqs:['gazania','any_adamantine_beetle'],via:'Gazania + Adamantine beetle'},
@@ -267,11 +358,24 @@
     {key:'pinecone',recipe:'Pinecone / Moss / Gunpowder Bridge',prereqs:['pollen_mithril'],via:'Mithril beetle + Mithril Pollen'},
     {key:'moss',recipe:'Pinecone / Moss / Gunpowder Bridge',prereqs:['pollen_mithril'],via:'Mithril beetle + Mithril Pollen'},
     {key:'gunpowder',recipe:'Pinecone / Moss / Gunpowder Bridge',prereqs:['pollen_mithril'],via:'Mithril beetle + Mithril Pollen'},
-    {key:'gazania',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Green + Adamantine beetle + Junk Cube'},
-    {key:'pincushion',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Green + Adamantine beetle + Junk Cube'},
+    {key:'gazania',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Adamantine beetle + Junk Cube (random Adamantine flower)'},
+    {key:'pincushion',recipe:'Adamantine Flower Transmute',prereqs:[],via:'Adamantine beetle + Junk Cube (random Adamantine flower)'},
     {key:'pollen_adamantine',recipe:'Adamantine Pollen',prereqs:[],via:'Assemble Pincushion + Gazania'}
   ];
   var FLOWER_CONSUMING = new Set(['Tin Pollen','Bronze Pollen','Mithril Pollen','Adamantine Pollen','Bronze Flower Transmute','Mithril Flower Transmute']);
+  // v12.4.20: recipes that produce ONE OF several siblings, not a deterministic
+  // output. Used by renderPanel to annotate goal/step recipes that look
+  // deterministic but aren't (e.g. "Adamantine Flower Transmute" yields a
+  // random Adamantine flower — Pincushion, Gazania, or Passionflower).
+  // Keep this set in sync with any new RNG-output recipe.
+  var MULTI_OUTPUT_RECIPES = new Set([
+    'Nectar / Cattail Bridge',
+    'Pinecone / Moss / Gunpowder Bridge',
+    'Tin Flower Transmute',
+    'Bronze Flower Transmute',
+    'Mithril Flower Transmute',
+    'Adamantine Flower Transmute'
+  ]);
   var BLOCKLIST = /^(svg|icon|button|slot|empty|more|smash|eject|assemble|home|search|left|right|go_back|show_password|claim|load|logo|dots|arrow|cheeseman|static\d*|beetleboy_logo|beetle_catch|craft|beetle_shader)$/i;
   var PFP_HASH = /^(pfp_\d+|retart|remilio|radbro|default|[a-f0-9]{20,})$/i;
 
@@ -418,10 +522,10 @@
       var merge = function(r) { for (var k in r.items) merged[k] = Math.max(merged[k]||0, r.items[k]); totalUnresolved += r.unresolved; };
       var seenFP = {};
       merge(scanPage('.crafting-module__inventory-grid .crafting-module__beetle-item','.crafting-module__beetle-img','.crafting-module__beetle-item-count'));
-      for (var i = 0; i < 20; i++) { var more = document.querySelector('.crafting-module__pagination-button'); if (!more || more.disabled || more.classList.contains('disabled')) break; more.click(); await new Promise(function(r){setTimeout(r,200);}); var page = scanPage('.crafting-module__inventory-grid .crafting-module__beetle-item','.crafting-module__beetle-img','.crafting-module__beetle-item-count'); var fp = fingerprint(page.items); if (seenFP[fp]) break; seenFP[fp] = true; merge(page); }
+      for (var i = 0; i < 20; i++) { var more = document.querySelector('.crafting-module__pagination-button'); if (!more || more.disabled || more.classList.contains('disabled')) break; more.click(); await new Promise(function(r){setTimeout(r,600);}); var page = scanPage('.crafting-module__inventory-grid .crafting-module__beetle-item','.crafting-module__beetle-img','.crafting-module__beetle-item-count'); var fp = fingerprint(page.items); if (seenFP[fp]) break; seenFP[fp] = true; merge(page); }
       var seenFP2 = {};
       merge(scanPage('.beetle-catch-module__beetle-item','.beetle-catch-module__beetle-img','.beetle-catch-module__beetle-item-count'));
-      for (var j = 0; j < 20; j++) { var more2 = document.querySelector('.beetle-catch-module__pagination-button'); if (!more2 || more2.disabled || more2.classList.contains('disabled')) break; more2.click(); await new Promise(function(r){setTimeout(r,200);}); var page2 = scanPage('.beetle-catch-module__beetle-item','.beetle-catch-module__beetle-img','.beetle-catch-module__beetle-item-count'); var fp2 = fingerprint(page2.items); if (seenFP2[fp2]) break; seenFP2[fp2] = true; merge(page2); }
+      for (var j = 0; j < 20; j++) { var more2 = document.querySelector('.beetle-catch-module__pagination-button'); if (!more2 || more2.disabled || more2.classList.contains('disabled')) break; more2.click(); await new Promise(function(r){setTimeout(r,600);}); var page2 = scanPage('.beetle-catch-module__beetle-item','.beetle-catch-module__beetle-img','.beetle-catch-module__beetle-item-count'); var fp2 = fingerprint(page2.items); if (seenFP2[fp2]) break; seenFP2[fp2] = true; merge(page2); }
       if (Object.keys(merged).length > 0) {
         // First-population scan (post-Reset or first ever): we have no
         // baseline to diff against, so every item would look "new" and
@@ -433,7 +537,21 @@
         for (var k in merged) { var old = oldInv[k]||0; if (merged[k] > old && !JUNK_SET.has(k) && k !== 'cheese') { changes.push(dn(k)+' +'+(merged[k]-old)); if (!firstPopulation && ALL_BEETLES.indexOf(k) > -1 && k !== 'green') for (var bi = 0; bi < merged[k]-old; bi++) S.session.gains.push(dn(k)); } }
         var jd = cnt(merged,ANY_JUNK) - cnt(oldInv,ANY_JUNK); if (jd > 0) changes.push('Junk +'+jd);
         var cd = (merged.cheese||0) - (oldInv.cheese||0); if (cd !== 0) changes.push('Cheese '+(cd>0?'+':'')+cd);
-        logEvent('Scan: '+(changes.length ? changes.join(', ') : 'no changes')+(totalUnresolved ? ' ('+totalUnresolved+' unresolved)' : ''));
+        // v12.4.18: only log scans with actual changes. Pre-v12.4.18 logged
+        // every scan including no-ops, which filled the 30-line log cap with
+        // "Scan: no changes (1 unresolved)" within an idle hour. Unresolved is
+        // surfaced separately when meaningful (changes occurred). Pure no-op
+        // scans are silent.
+        if (changes.length) {
+          logEvent('Scan: '+changes.join(', ')+(totalUnresolved ? ' ('+totalUnresolved+' unresolved)' : ''));
+        } else if (totalUnresolved && totalUnresolved !== S._lastUnresolved) {
+          // Log only when unresolved COUNT changes — indicates a new item type
+          // appeared (likely a wiki update). Suppresses steady-state noise.
+          logEvent('Scan: '+totalUnresolved+' unresolved item type(s) — script may need a data refresh');
+          S._lastUnresolved = totalUnresolved;
+        } else if (!totalUnresolved && S._lastUnresolved) {
+          S._lastUnresolved = 0;
+        }
         S.lastFullScan = Date.now(); S.lastPassiveScan = Date.now();
       } else { logEvent('Scan: no items found'); }
     } finally { _scanning = false; }
@@ -536,6 +654,14 @@
     if (!(inv['sabertooth_longhorn']||0)) { if (forOut === 'sabertooth_longhorn') return false; if (key === 'pincushion' && (inv[key]||0) <= 1) return true; }
     if (!(inv['mars_rhino']||0)) { if (forOut === 'mars_rhino') return false; if ((key === 'black_lotus' || key === 'sunset_moth' || key === 'sabertooth_longhorn') && (inv[key]||0) <= 1) return true; }
     if (!(inv['hercules']||0)) { if (forOut === 'hercules') return false; if ((key === 'golden_scarab' || key === 'pollen_adamantine') && (inv[key]||0) <= 1) return true; }
+    // v12.4.20: protect the new "special-beetle" mithril/adamantine flowers
+    // (fringed_iris, larkspur, passionflower). Without these, the Mithril
+    // Pollen / Adamantine Pollen / Mithril Flower Transmute recipes could
+    // consume the user's last copy if at least one same-tier sibling has 2+.
+    // Closes the gap RECIPE_AUDIT.md section 4 identified.
+    if (!(inv['blue_longicorn']||0)) { if (forOut === 'blue_longicorn') return false; if (key === 'fringed_iris' && (inv[key]||0) <= 1) return true; }
+    if (!(inv['golden_tiger']||0)) { if (forOut === 'golden_tiger') return false; if (key === 'larkspur' && (inv[key]||0) <= 1) return true; }
+    if (!(inv['death_feigning']||0)) { if (forOut === 'death_feigning') return false; if (key === 'passionflower' && (inv[key]||0) <= 1) return true; }
     return false;
   }
   function getDirectCrafts(inv) {
@@ -1225,9 +1351,32 @@
     h += '<div class="bc8-focus"><div class="bc8-h">Next moves <span class="bc8-badge '+sb+'" style="font-size:8px;">'+sl.toUpperCase()+'</span></div>';
     if (prog && (prog.type==='direct'||prog.type==='prereq')) {
       var pr = RECIPES.find(function(r){return r.label===prog.label;});
+      // v12.4.19: render goal and prereq recipes UNAMBIGUOUSLY. The previous
+      // template showed only `prog.label`'s inputs under the goal heading; for
+      // prereq moves that read as if the goal's ingredients were the prereq's
+      // ingredients (e.g. "Black Lotus GOAL / Mithril beetle + Mithril Pollen"
+      // \u2014 which is the bridge recipe, NOT the Black Lotus recipe). Now we
+      // ALWAYS surface the goal recipe explicitly, then a separately-labeled
+      // step recipe for prereq moves. Source of truth for the goal recipe:
+      // the active chain (ENDGAME/BROAD/FLOWER) \u2014 chainEntry.recipe maps the
+      // goal key back to its RECIPES label.
+      var chainForDisplay = S.strategy === 'flowers' ? FLOWER_CHAIN : (S.strategy === 'broad' ? BROAD_CHAIN : ENDGAME_CHAIN);
+      var chainEntry = chainForDisplay.find(function(c){return c.key===prog.goal;});
+      var goalRecipe = chainEntry ? RECIPES.find(function(r){return r.label===chainEntry.recipe;}) : null;
       h += '<div style="font-weight:800;font-size:14px;">'+dn(prog.goal)+' <span class="bc8-badge bc8-fresh">GOAL</span></div>';
-      if (pr) h += '<div class="bc8-muted">\u2705 '+pr.inputs.map(tokHuman).join(' + ')+'</div>';
-      if (prog.type==='prereq') h += '<div class="bc8-muted">\u{1F536} '+prog.reason+'</div>';
+      // v12.4.20: annotate multi-output recipes so the user doesn't read the
+      // recipe line as deterministic. E.g. "\ud83c\udfaf Gazania recipe: Adamantine
+      // beetle + Junk Cube" \u2192 "...Junk Cube (random sibling)" because the
+      // transmute yields ANY Adamantine flower, not specifically Gazania.
+      var rngNote = function(rcp) { return rcp && MULTI_OUTPUT_RECIPES.has(rcp.label) ? ' <span style="color:#c87f0a;">(random sibling)</span>' : ''; };
+      if (prog.type === 'direct') {
+        // prog.label IS the goal recipe \u2014 single clean line.
+        if (pr) h += '<div class="bc8-muted">\u2705 Craft now: '+pr.inputs.map(tokHuman).join(' + ')+rngNote(pr)+'</div>';
+      } else {
+        // Prereq: show BOTH recipes, labeled.
+        if (goalRecipe) h += '<div class="bc8-muted">\u{1F3AF} '+dn(prog.goal)+' recipe: '+goalRecipe.inputs.map(tokHuman).join(' + ')+rngNote(goalRecipe)+'</div>';
+        if (pr) h += '<div class="bc8-muted">\u{1F527} Step now: '+prog.label+' \u2014 '+pr.inputs.map(tokHuman).join(' + ')+rngNote(pr)+'</div>';
+      }
     }
     var shown = 0; for (var ci = 0; ci < crafts.length && shown < 3; ci++) {
       if (prog && crafts[ci].label === prog.label) continue;

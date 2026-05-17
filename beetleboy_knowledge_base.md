@@ -1,5 +1,13 @@
 # BeetleBoy / BeetleCraft Knowledge Base
-_Last updated: 2026-04-07 (v11.5.0 — see beetle_known_recipes_human_readable.md for latest)_
+_Last updated: 2026-05-17 (v12.4.18 — see WIKI_AUDIT.md for the full 2026-05-17 wiki scrape)_
+
+> **2026-05-17 note:** This doc is the 2026-04-07 baseline. A fresh beetle.wiki audit lives in `WIKI_AUDIT.md`; deltas summarized at the top of `beetle_known_recipes_human_readable.md`. Key things to know up front:
+> - 5 new beetles (cucumber, bumblebee, blue_longicorn, golden_tiger, death_feigning) and 8 new flowers (carnation, snapdragon, petunia, st_johns_wort, magnolia, fringed_iris, larkspur, passionflower) now exist.
+> - Specimen Pin is a 6th Adamantine artifact.
+> - Trinket + Trophy crafting is an entire domain absent from this doc — see `WIKI_AUDIT.md` sections F.4–F.5.
+> - Flower Transmute is single-beetle + Junk Cube (not 3-input "green + beetle + junk").
+> - Hercules recipe is not on the wiki — treat as folklore until verified in-game.
+> - Hammer post-first-use break: Adamantine 2%→5%, Diamond 1%→9%.
 
 This document is a durable handoff/reference file for future AI conversations about the RemiliaNET BeetleBoy / BeetleCraft game.
 

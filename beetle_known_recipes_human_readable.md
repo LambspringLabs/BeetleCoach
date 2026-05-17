@@ -1,7 +1,28 @@
 # BeetleBoy / BeetleCraft — Known Recipes, Facts & Coach Reference
-_Last updated: 2026-04-07 (v10.3 — live hammer break%, strategy toggle, flower transmutation, smart navigation)_
+_Last updated: 2026-05-17 (v12.4.18 — wiki resync after Christmas Crafting Update)_
 
 This is the clean human-readable recipe and mechanics text file for future AI chats and personal reference.
+
+> **2026-05-17 audit:** the file below was last touched 2026-04-07 and is partially stale against the live beetle.wiki. Full structured re-scrape is in `WIKI_AUDIT.md`. Key deltas the AI/reader should know before using this doc:
+>
+> - **Hercules recipe is unverified.** No `beetle:hercules` page exists on the wiki. The "Golden Scarab + Adamantine Pollen + Purple" recipe in section 9 is unconfirmed folklore — investigate before trusting.
+> - **Flower Transmute uses ONE beetle, not two.** Wiki: `<rarity> beetle + Junk Cube → same-tier flower` (smash). The "Green sacrifice + beetle + Junk Cube" form in section 10 is not on the wiki. **CONFIRMED 2026-05-17 by user (in-game test): single-beetle form works.** The v12.4.18 userscript uses wiki-canonical recipes; section 10 below preserves the older (wrong) 3-input form for historical record only — do not act on it.
+> - **5 new beetles** added to the wiki since April: Striped Cucumber (Bronze, drop only, non-transmutable), Bumblebee (Mithril, recipe unknown, non-transmutable), Black-Spotted Blue Longicorn (Mithril, `fringed_iris + mithril_beetle`), Golden-Spotted Tiger Beetle (Mithril, `larkspur + mithril_beetle`), Blue Death Feigning (Adamantine, `passionflower + adamantine_beetle`).
+> - **8 new flowers** added: Chinese Pink Carnation, Common Snapdragon, Large White Petunia (all Tin); Spotted St. John's Wort, Southern Magnolia (Bronze); Fringed Iris, Two-spike Larkspur (Mithril); Purple Passionflower (Adamantine).
+> - **Specimen Pin** is a 6th Adamantine artifact, recipe undocumented on wiki.
+> - **Hammer post-first-use break chance bumps** — Adamantine 2%→5%, Diamond 1%→9%. Section 12 table has only base.
+> - **Flower Reroll** (assemble, undocumented in section 4): `Junk Tesseract + Flower → different flower of same tier`. New tool.
+> - **Daily reset rule** (section 13): every hammer gets one 0%-break smash per day after Universal Basic Cheese reset.
+> - **Trinkets + Trophies** are an entire content domain absent below — see `WIKI_AUDIT.md` section F.4 + F.5. 9 trinkets + 15 trophies with documented recipes. First craft of a trinket recipe awards the Trophy version; subsequent crafts award the Trinket.
+> - **Junk item count is 45**, not 27. Full list in `WIKI_AUDIT.md` section F.6.
+> - **Sacrifice rules** (section 13): "Sacrifice is NOT part of the recipe. May change probability AND/OR rarity. Both Green and Purple work." The framing of "Green is for transmutation, Purple is for high tier" overstates it.
+> - **Goliath / Stag / Bombardier are BOTH drop AND craft.** Earlier framing of "craft-only" is wrong.
+> - **Cucumber + Bumblebee cannot be transmuted to flowers** — confirmed by wiki.
+> - **External recipe DB**: `https://db.beetle.wiki/` is community-maintained, queryable lookup tool.
+>
+> Everything below this point is the 2026-04-07 baseline. Cross-check against `WIKI_AUDIT.md` before treating any specific recipe as authoritative.
+
+---
 
 ## 1. Core game model
 
@@ -268,16 +289,25 @@ This is one of the important newer high-tier confirmed routes.
 
 ## 10. Flower transmutation rule
 
-One of the most important practical discoveries:
+> **REVISED 2026-05-17 — wiki-canonical form confirmed in-game.** The text below this note is the older 3-input version that turned out to be wrong; preserved only for context.
 
-### Green Beetle sacrifice + beetle + Junk Cube -> same-tier flower
+### Canonical (2026-05-17, wiki + in-game confirmed)
 
-Examples:
-- Green Beetle + Green Beetle + Junk Cube -> Sunflower
-- Green Beetle + Purple Beetle + Junk Cube -> Gallic Rose
-- Green Beetle + Mithril beetle + Junk Cube -> likely Mithril flower transmutation route
+**`<rarity> beetle + Junk Cube → same-tier flower`** (smash)
 
-This is strategically huge because it gives a reliable way to farm flowers for pollen creation.
+- Green Beetle + Junk Cube → random Tin flower
+- Ladybug or Purple Beetle + Junk Cube → random Bronze flower
+- Pond or Monarch + Junk Cube → random Mithril flower
+- Goliath / Stag / Bombardier + Junk Cube → random Adamantine flower
+
+Constraints:
+- **One-way only.** Flower + Junk Cube does not produce a beetle.
+- **Striped Cucumber Beetle and Bumblebee cannot be transmuted** (per beetle.wiki). The v12.4.18 script keeps them out of `BRONZE_BEETLES` / `MITHRIL_BEETLES` for this reason.
+- **Diamond-tier beetles cannot be transmuted.** Golden Scarab + Junk Cube is a documented anti-recipe.
+
+### Historical (pre-2026-05-17, wrong) — do not use
+
+This section described a 3-input form: "Green Beetle sacrifice + beetle + Junk Cube → same-tier flower". Examples claimed Green+Green+Junk Cube → Sunflower, Green+Purple+Junk Cube → Gallic Rose, etc. The wiki documents only the 2-input form above and in-game testing on 2026-05-17 confirmed the single-beetle form works. Treat the 3-input claim as superseded.
 
 ---
 
