@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Friend Explorer
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.0.2
 // @description  Discover unfriended users via mutuals-of-mutuals graph harvest, then bulk-add with rate limiting. Standalone, separate from BeetleCoach.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -41,7 +41,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '1.0.1';
+  var VER = '1.0.2';
   var STORE_KEY = 'remilia_friend_explorer_v1_store';
   var PANEL_ID = 'rfx-panel';
   var BTN_ID = 'rfx-toggle';
@@ -82,6 +82,8 @@
       sentRequests: {},
       failedRequests: {},
       dailyCount: 0,
+      dailySkipped: 0,
+      dailyFailed: 0,
       dailyResetAt: Date.now(),
       dailyCap: 100,
       delayMsMin: 5000,
@@ -90,7 +92,11 @@
       paused: false,
       backoffUntil: 0,
       log: [],
-      panelOpen: true
+      panelOpen: true,
+      // v1.0.2: observability state
+      lastAction: null,        // {type:'add'|'skip'|'fail'|'harvest', target, ts, detail}
+      nextAddAt: 0,            // timestamp when the next auto-add will fire (for live countdown)
+      harvestProgress: null    // {done, total, candidatesSoFar} while harvesting
     };
   }
   function load() {
@@ -123,6 +129,13 @@
     if (el) el.innerHTML = S.log.map(function(l){ return '<div class="rfx-log-line">'+escapeHtml(l)+'</div>'; }).join('');
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function formatAgo(ms) {
+    if (ms < 5000) return 'just now';
+    if (ms < 60000) return Math.floor(ms / 1000) + 's ago';
+    if (ms < 3600000) return Math.floor(ms / 60000) + 'm ago';
+    if (ms < 86400000) return Math.floor(ms / 3600000) + 'h ago';
+    return Math.floor(ms / 86400000) + 'd ago';
+  }
 
   /* ═══════════════════════════════════════════════════════
      3. MULTI-TAB LOCK
@@ -241,6 +254,10 @@
         var tmp = queue[i]; queue[i] = queue[j]; queue[j] = tmp;
       }
       var done = 0;
+      var totalToScan = queue.length;
+      // v1.0.2: surface progress for the user
+      S.harvestProgress = {done:0, total:totalToScan, candidatesSoFar:Object.keys(candidates).length};
+      save(); render();
       var batch;
       while (queue.length > 0) {
         batch = queue.splice(0, HARVEST_PARALLEL);
@@ -270,20 +287,26 @@
         }));
         // Small inter-batch breath
         await new Promise(function(r){ setTimeout(r, HARVEST_BATCH_DELAY_MS); });
-        // Lightweight progress update every ~25 batches
-        if (done % 25 === 0) {
+        // v1.0.2: update progress every batch so the user sees the bar move
+        S.harvestProgress = {done:done, total:totalToScan, candidatesSoFar:Object.keys(candidates).length};
+        if (done % 10 === 0) {
           S.candidates = candidates;
           S.candidatesUpdatedAt = Date.now();
           save();
-          logEvent('Harvest progress: '+done+' / '+S.myFriends.length+' friends scanned');
+          render();
+        } else {
+          // Light re-render without GM_setValue churn — just update the
+          // progress bar so the UI feels alive between heavier saves.
           render();
         }
       }
+      S.harvestProgress = null;
       S.candidates = candidates;
       S.candidatesUpdatedAt = Date.now();
-      save();
       var totalCandidates = Object.keys(candidates).length;
-      logEvent('Harvest done: '+totalCandidates+' unique candidates');
+      S.lastAction = {type:'harvest', target:'', ts:Date.now(), detail:totalCandidates+' candidates'};
+      save();
+      logEvent('✓ Harvest done: '+totalCandidates+' unique candidates');
       render();
     } catch (e) {
       logEvent('Harvest error: '+e.message);
@@ -325,6 +348,8 @@
   function dailyCapRemaining() {
     if (Date.now() - S.dailyResetAt > DAY_MS) {
       S.dailyCount = 0;
+      S.dailySkipped = 0;
+      S.dailyFailed = 0;
       S.dailyResetAt = Date.now();
       save();
     }
@@ -379,12 +404,15 @@
       // Keep slot reserved (don't refund — slot is "spent" on a known-bad target).
       S.sentRequests[username] = {ts:Date.now(), status:'rejected', code:resp.status};
       S.failedRequests[username] = {ts:Date.now(), error:'http_'+resp.status, status:resp.status, body:resp.body};
-      logEvent('Add ~'+username+' rejected ('+resp.status+')');
+      S.dailyFailed = (S.dailyFailed||0) + 1;
+      S.lastAction = {type:'fail', target:username, ts:Date.now(), detail:'HTTP '+resp.status};
+      logEvent('✗ Add ~'+username+' rejected ('+resp.status+')');
       save(); render();
       return {ok:false, reason:'http', status:resp.status};
     }
     // Success.
     S.sentRequests[username] = {ts:Date.now(), status:'sent'};
+    S.lastAction = {type:'add', target:username, ts:Date.now()};
     logEvent('✓ Add ~'+username+' (today: '+S.dailyCount+'/'+S.dailyCap+')');
     save(); render();
     return {ok:true};
@@ -395,7 +423,9 @@
     // failedRequests bucket with a sentinel error so it doesn't get
     // confused with real failures.
     S.failedRequests[username] = {ts:Date.now(), error:'user-skipped', status:0};
-    logEvent('✗ Skip ~'+username);
+    S.dailySkipped = (S.dailySkipped||0) + 1;
+    S.lastAction = {type:'skip', target:username, ts:Date.now()};
+    logEvent('⊘ Skip ~'+username);
     save(); render();
   }
 
@@ -405,9 +435,15 @@
   var _autoTimer = null;
   function scheduleAutoTick() {
     if (_autoTimer) clearTimeout(_autoTimer);
-    if (!S.autoAdd || S.paused) return;
-    if (!isLeaderTab()) return; // only the leader tab auto-adds
+    S.nextAddAt = 0;
+    if (!S.autoAdd || S.paused) { save(); return; }
+    if (!isLeaderTab()) { save(); return; } // only the leader tab auto-adds
     var delay = S.delayMsMin + Math.random() * (S.delayMsMax - S.delayMsMin);
+    // v1.0.2: surface the next-add timestamp so the panel can show a live
+    // countdown ("Next add in 6s..."). Without this the user can't tell
+    // whether auto-add is actively queued or stuck.
+    S.nextAddAt = Date.now() + delay;
+    save();
     _autoTimer = setTimeout(autoTick, delay);
   }
   async function autoTick() {
@@ -465,7 +501,23 @@
       + '.rfx-badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:800;}'
       + '.rfx-badge.ok{background:#dcfce7;color:#166534;}'
       + '.rfx-badge.warn{background:#fef3c7;color:#854d0e;}'
-      + '.rfx-badge.danger{background:#fee2e2;color:#991b1b;}';
+      + '.rfx-badge.danger{background:#fee2e2;color:#991b1b;}'
+      + '.rfx-heartbeat{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:4px;animation:rfx-pulse 2s ease-in-out infinite;}'
+      + '@keyframes rfx-pulse{0%,100%{opacity:0.4;}50%{opacity:1;box-shadow:0 0 6px #22c55e;}}'
+      + '.rfx-heartbeat.paused{background:#94a3b8;animation:none;opacity:0.6;}'
+      + '.rfx-heartbeat.warn{background:#f59e0b;}'
+      + '.rfx-last{background:#fefce8;border-left:3px solid #facc15;border-radius:4px;padding:6px 8px;font-size:11px;color:#713f12;display:flex;justify-content:space-between;align-items:center;}'
+      + '.rfx-last.ok{background:#f0fdf4;border-left-color:#22c55e;color:#14532d;}'
+      + '.rfx-last.danger{background:#fef2f2;border-left-color:#ef4444;color:#7f1d1d;}'
+      + '.rfx-last.muted{background:#f8fafc;border-left-color:#cbd5e1;color:#475569;}'
+      + '.rfx-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:10px;color:#831843;}'
+      + '.rfx-stat{background:#fff;border:1px solid #fce7f3;border-radius:6px;padding:4px 6px;text-align:center;}'
+      + '.rfx-stat-num{display:block;font-size:16px;font-weight:800;line-height:1;}'
+      + '.rfx-stat-lbl{display:block;font-size:9px;text-transform:uppercase;color:#9ca3af;margin-top:2px;}'
+      + '.rfx-countdown{font-variant-numeric:tabular-nums;font-weight:800;color:#166534;}'
+      + '.rfx-progress{background:#fff;border:1px solid #fce7f3;border-radius:6px;padding:6px 8px;font-size:11px;color:#831843;}'
+      + '.rfx-progress-bar{height:8px;background:#fce7f3;border-radius:4px;overflow:hidden;margin-top:4px;}'
+      + '.rfx-progress-fill{height:100%;background:linear-gradient(90deg,#f9a8d4,#ec4899);transition:width 200ms ease;}';
     document.head.appendChild(s);
   }
   function ensureUI() {
@@ -508,17 +560,59 @@
     } else {
       statusBadge = '<span class="rfx-badge warn">manual</span>';
     }
+    // v1.0.2: heartbeat dot status. Green pulse = healthy and alive,
+    // gray = paused, amber = backoff.
+    var hbCls = 'rfx-heartbeat';
+    if (S.paused) hbCls += ' paused';
+    else if (inBackoff()) hbCls += ' warn';
     var h = '';
     h += '<div class="rfx-header">';
-    h +=   '<div><span class="rfx-title">💗 Friend Explorer</span> <span class="rfx-sub">v'+VER+'</span></div>';
+    h +=   '<div><span class="'+hbCls+'" title="'+(S.paused?'paused':inBackoff()?'backing off':'alive')+'"></span><span class="rfx-title">💗 Friend Explorer</span> <span class="rfx-sub">v'+VER+'</span></div>';
     h +=   '<button class="rfx-btn" id="rfx-close">✕</button>';
     h += '</div>';
+    // v1.0.2: last-action banner shows the most recent thing the script did,
+    // so the user can glance at the panel and immediately see "yes it's
+    // working" without scrolling the log.
+    if (S.lastAction) {
+      var la = S.lastAction;
+      var when = new Date(la.ts);
+      var ago = formatAgo(Date.now() - la.ts);
+      var laTxt, laCls;
+      if (la.type === 'add')      { laTxt = '✓ Added ~'+la.target;       laCls = 'ok'; }
+      else if (la.type === 'skip'){ laTxt = '⊘ Skipped ~'+la.target;     laCls = 'muted'; }
+      else if (la.type === 'fail'){ laTxt = '✗ Failed ~'+la.target+(la.detail?' ('+la.detail+')':''); laCls = 'danger'; }
+      else if (la.type === 'harvest'){ laTxt = '🔍 Harvest complete '+(la.detail||''); laCls = 'ok'; }
+      else laTxt = la.type;
+      h += '<div class="rfx-last '+(laCls||'')+'"><span>'+escapeHtml(laTxt)+'</span><span class="rfx-sub">'+ago+'</span></div>';
+    }
+    // v1.0.2: stats grid — 4 numbers that update on every action so the
+    // user sees them tick in real time.
+    h += '<div class="rfx-stats">';
+    h +=   '<div class="rfx-stat"><span class="rfx-stat-num">'+S.dailyCount+'</span><span class="rfx-stat-lbl">sent today</span></div>';
+    h +=   '<div class="rfx-stat"><span class="rfx-stat-num">'+(S.dailySkipped||0)+'</span><span class="rfx-stat-lbl">skipped</span></div>';
+    h +=   '<div class="rfx-stat"><span class="rfx-stat-num">'+(S.dailyFailed||0)+'</span><span class="rfx-stat-lbl">failed</span></div>';
+    h +=   '<div class="rfx-stat"><span class="rfx-stat-num">'+ranked.length+'</span><span class="rfx-stat-lbl">queued</span></div>';
+    h += '</div>';
     h += '<div class="rfx-strip">';
-    h +=   'Today: <b>'+S.dailyCount+'/'+S.dailyCap+'</b> · ';
-    h +=   'Candidates: <b>'+ranked.length+'</b> · ';
-    h +=   'Sent: <b>'+Object.keys(S.sentRequests).length+'</b> · ';
+    h +=   'Daily cap: <b>'+S.dailyCount+'/'+S.dailyCap+'</b> · ';
+    h +=   'Lifetime sent: <b>'+Object.keys(S.sentRequests).length+'</b> · ';
     h +=   statusBadge;
     h += '</div>';
+    // v1.0.2: harvest progress bar (only shown while harvesting)
+    if (S.harvestProgress) {
+      var hp = S.harvestProgress;
+      var pct = hp.total > 0 ? Math.round((hp.done / hp.total) * 100) : 0;
+      h += '<div class="rfx-progress">';
+      h +=   '<div>🔍 Harvesting friend graph — <b>'+hp.done+' / '+hp.total+'</b> friends scanned · <b>'+hp.candidatesSoFar+'</b> candidates so far</div>';
+      h +=   '<div class="rfx-progress-bar"><div class="rfx-progress-fill" style="width:'+pct+'%;"></div></div>';
+      h += '</div>';
+    }
+    // v1.0.2: live countdown to next auto-add (only when auto-add is on)
+    if (S.autoAdd && !S.paused && !inBackoff() && S.nextAddAt > Date.now()) {
+      var msLeft = Math.max(0, S.nextAddAt - Date.now());
+      var secLeft = Math.ceil(msLeft / 1000);
+      h += '<div class="rfx-strip" id="rfx-countdown-strip">⏱ Next auto-add in <span class="rfx-countdown" id="rfx-countdown">'+secLeft+'s</span></div>';
+    }
     h += '<div class="rfx-btns">';
     h +=   '<button class="rfx-btn" id="rfx-harvest">'+(_harvesting?'⏳ Harvesting…':'\u{1F50D} Harvest')+'</button>';
     h +=   '<button class="rfx-btn '+(S.autoAdd?'on':'')+'" id="rfx-auto">Auto-add '+(S.autoAdd?'ON':'OFF')+'</button>';
@@ -647,6 +741,23 @@
     render();
     // If a previous session left auto-add ON, resume it on boot
     if (S.autoAdd && !S.paused) scheduleAutoTick();
+    // v1.0.2: 1-second tick to update just the countdown text and the
+    // last-action time-ago label, without re-rendering the whole panel.
+    // Cheap enough to run continuously; bails when panel is hidden.
+    setInterval(function(){
+      var p = document.getElementById(PANEL_ID);
+      if (!p || p.classList.contains('hidden')) return;
+      // Update countdown text in place
+      var cd = document.getElementById('rfx-countdown');
+      if (cd && S.autoAdd && !S.paused && !inBackoff() && S.nextAddAt > Date.now()) {
+        var sec = Math.max(0, Math.ceil((S.nextAddAt - Date.now()) / 1000));
+        cd.textContent = sec + 's';
+      } else if (cd && (!S.autoAdd || S.nextAddAt <= Date.now())) {
+        // Countdown reached zero or got disabled — full re-render so the
+        // strip either disappears or shows the next scheduled time.
+        render();
+      }
+    }, 1000);
     console.log('[RFX] Remilia Friend Explorer v'+VER+' loaded.');
   }
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
