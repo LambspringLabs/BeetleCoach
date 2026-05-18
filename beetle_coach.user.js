@@ -857,7 +857,29 @@
       S.session.gains.push(dn(bc.output));
     }
     logEvent('Chat: ' + bc.type + ' → ' + dn(bc.output));
+    // v12.4.24: schedule a debounced fullScan after every observed craft.
+    // The previous behavior left S.mergedInventory stale until the user
+    // manually hit Full Scan; over many crafts the junk count drifted high
+    // (consumed items weren't decremented). Debounce coalesces bursts of
+    // back-to-back crafts into a single scan after 4s of quiet.
+    scheduleInventoryRefresh();
     return true;
+  }
+  var _invRefreshTimer = null;
+  function scheduleInventoryRefresh() {
+    // Use passiveScan (non-destructive — only updates items visible on the
+    // current page) rather than fullScan (REPLACES inventory, losing any
+    // items not paginated through). The craft most likely consumed items
+    // from the currently-visible page, so passiveScan should catch the
+    // decrement. If user is on a different page, no harm done; the count
+    // just stays as-is until next Full Scan.
+    if (_invRefreshTimer) clearTimeout(_invRefreshTimer);
+    _invRefreshTimer = setTimeout(function() {
+      _invRefreshTimer = null;
+      if (_scanning) return;
+      if (S.paused) return;
+      try { passiveScan(); renderPanel(); } catch (e) { /* silent */ }
+    }, 4000);
   }
   function setupChatObserver() {
     // v12.4.23: lower-latency chat monitor via MutationObserver. Once
@@ -1787,7 +1809,13 @@
     // the card only shows when meaningful action is available.
     var jc = computeJunkCompress(inv);
     if (jc.raw >= 20) {
-      h += '<div class="bc8-compress"><div class="bc8-compress-h">\uD83D\uDDDC Junk Compression</div>';
+      // v12.4.24: surface staleness on the card so the user can tell when
+      // the displayed count may not match the game. lastFullScan > 30 min
+      // ago = "stale" hint with a nudge to hit Full Scan.
+      var lfs = S.lastFullScan || 0;
+      var staleMin = lfs ? Math.floor((Date.now() - lfs) / 60000) : null;
+      var staleHint = (staleMin == null || staleMin >= 30) ? ' <span class="bc8-muted" style="font-size:9px;font-weight:600;color:#c0392b;">(' + (staleMin == null ? 'never scanned' : staleMin + 'm old') + ' \u2014 hit Full Scan)</span>' : '';
+      h += '<div class="bc8-compress"><div class="bc8-compress-h">\uD83D\uDDDC Junk Compression'+staleHint+'</div>';
       h += '<div>Raw junk: <b>'+jc.raw+'</b> \u2192 <b>'+jc.possibleCubesFromRaw+'</b> Cubes possible (have <b>'+jc.currentCubes+'</b>)</div>';
       h += '<div>Cubes available: <b>'+jc.totalCubesAfterCompress+'</b> \u2192 <b>'+jc.possibleTess+'</b> Tesseracts possible (have <b>'+jc.currentTess+'</b>)</div>';
       if (jc.sessionCubesCrafted || jc.sessionTessCrafted) {
