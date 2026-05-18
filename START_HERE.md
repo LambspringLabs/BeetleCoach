@@ -8,6 +8,15 @@ _Last updated: 2026-05-18 (v12.4.21)._
 
 ## 30-second project summary
 
+This repo hosts **two** Tampermonkey userscripts that both target `remilia.net`:
+
+1. **BeetleCoach** (`beetle_coach.user.js`) — the BeetleBoy game coach + automator. Current version: v12.4.23.
+2. **Remilia Friend Explorer** (`remilia_friend_explorer.user.js`) — a separate tool that grows your friend graph by discovering mutuals-of-mutuals and bulk-adding with rate limits. Current version: v1.0.1. Independent of BC; runs on any remilia.net page.
+
+This file's main focus is BeetleCoach. The Friend Explorer is summarized in its own header comment; the same conventions apply (see LESSONS_LEARNED.md for shared gotchas + injection-pattern warnings).
+
+### BeetleCoach in 30 seconds
+
 BeetleCoach is a Tampermonkey userscript at `C:\BeetleCoach\beetle_coach.user.js` that automates and advises play in the BeetleBoy game on `remilia.net`. It runs in-browser, persisted via `GM_getValue`/`GM_setValue`. The script:
 
 - **Automates**: free 2h beetle catch, paid hunts (20 cheese each), daily cheese claim, auto-login on session expiry, eject-recovery (cartridge LOAD lever pulls), stuck-state recovery (PROCESSING button stuck → page refresh).
@@ -55,7 +64,8 @@ Current version: **v12.4.21**. Repo: `github.com/LambspringLabs/BeetleCoach` (`m
 
 ```
 C:\BeetleCoach\
-├── beetle_coach.user.js          THE script (Tampermonkey userscript)
+├── beetle_coach.user.js              THE BeetleCoach userscript (game coach)
+├── remilia_friend_explorer.user.js   Separate userscript: friend-graph harvest + bulk add
 ├── HANDOFF_v12.md                Architecture handoff (v12 refactor + v12.4.x epilogue)
 ├── OPERATING_MANUAL.md           Runtime behavior + user-facing manual
 ├── START_HERE.md                 This file

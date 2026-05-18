@@ -1,29 +1,47 @@
 // ==UserScript==
 // @name         Remilia Friend Explorer
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.1
 // @description  Discover unfriended users via mutuals-of-mutuals graph harvest, then bulk-add with rate limiting. Standalone, separate from BeetleCoach.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_notification
 // @run-at       document-end
 // @updateURL    https://raw.githubusercontent.com/LambspringLabs/BeetleCoach/master/remilia_friend_explorer.user.js
 // @downloadURL  https://raw.githubusercontent.com/LambspringLabs/BeetleCoach/master/remilia_friend_explorer.user.js
 // ==/UserScript==
 
+// SECURITY: this script makes authenticated requests with your remilia.net
+// session cookie. Trust model:
+//   - Only loaded on the exact origin via @match + runtime exact-equality
+//     domain check (no substring match — evilremilia.net would not pass).
+//   - No remote code loading (no @require, no script tag injection).
+//   - @updateURL points only at LambspringLabs/BeetleCoach master — if
+//     that repo is compromised, the auto-update path lets an attacker run
+//     arbitrary code with cookie access. Audit diffs before pulling.
+//   - GM grants minimized: only GM_getValue / GM_setValue. No
+//     GM_xmlhttpRequest (which bypasses CORS), no GM_notification, no
+//     unsafeWindow. A future grant addition triggers a Tampermonkey
+//     permission re-prompt.
+//   - All user-controlled API content (displayName, username, via list)
+//     is rendered via textContent or escaped, never via innerHTML with
+//     raw values. pfpUrl is validated to https:// or /imgproxy/ prefix
+//     before being assigned as <img src>.
+
 (function () {
   'use strict';
 
-  // Domain guard — refuse to do anything if loaded somewhere unexpected.
-  // The @match restricts injection, but belt-and-suspenders since we'll
-  // make authenticated requests using cookie credentials.
-  if (location.host !== 'www.remilia.net') return;
+  // Domain guard — refuse to run if loaded somewhere unexpected.
+  // Strict equality on full hostname; allow both www and naked.
+  if (location.host !== 'www.remilia.net' && location.host !== 'remilia.net') {
+    console.warn('[RFX] Refusing to run on host:', location.host);
+    return;
+  }
 
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '1.0.0';
+  var VER = '1.0.1';
   var STORE_KEY = 'remilia_friend_explorer_v1_store';
   var PANEL_ID = 'rfx-panel';
   var BTN_ID = 'rfx-toggle';
@@ -34,11 +52,21 @@
 
   // Hard guardrails — independent of user-configurable daily cap.
   // If a bug ever pushes dailyCount past dailyCap, the burst limit
-  // still prevents flooding the server.
+  // still prevents flooding the server. These are CONSTANTS (not in
+  // S) — a future state-mutating bug can't lower them.
   var BURST_MAX_PER_MIN = 10;
-  var HARVEST_PARALLEL = 5;
-  var HARVEST_BATCH_DELAY_MS = 150;
+  // v1.0.1: harvest is the bigger ban-risk vector (3800+ GETs vs 100
+  // POSTs). Drop parallel from 5 → 2 and bump inter-batch delay so
+  // we stay well under anti-abuse traffic-shape heuristics. ~5 req/s
+  // sustained, total ~12 min for a fresh harvest.
+  var HARVEST_PARALLEL = 2;
+  var HARVEST_BATCH_DELAY_MS = 250;
   var BACKOFF_ON_429_MS = 5 * 60 * 1000;
+  // pfpUrl must start with one of these prefixes to be rendered as
+  // an <img src>. API-supplied URLs that don't match get suppressed
+  // (the card still renders, just no avatar). Belt-and-suspenders
+  // against an API-content XSS via a `javascript:` or `data:` URL.
+  var PFP_OK_PREFIXES = ['https://', '/imgproxy/', '/pfp/'];
 
   /* ═══════════════════════════════════════════════════════
      2. STATE
@@ -203,9 +231,15 @@
       logEvent('My friends: '+S.myFriends.length);
 
       // 2) For each friend, fetch their friends. Aggregate counts.
+      // v1.0.1: shuffle order so the request pattern doesn't look like a
+      // monotone alphabetical sweep (less obvious traffic fingerprint).
       var myFriendsSet = new Set(S.myFriends);
       var candidates = S.candidates || {};
       var queue = S.myFriends.slice();
+      for (var i = queue.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = queue[i]; queue[i] = queue[j]; queue[j] = tmp;
+      }
       var done = 0;
       var batch;
       while (queue.length > 0) {
@@ -300,16 +334,31 @@
 
   async function doAdd(username) {
     if (!username) return {ok:false, reason:'no-target'};
+    // v1.0.1: re-read state from GM right before mutating to avoid
+    // multi-tab read-modify-write races. The other tab may have just
+    // burned a slot we thought was free.
+    var fresh = load();
+    Object.assign(S, fresh);
     if (S.sentRequests[username]) return {ok:false, reason:'already-sent'};
     if (S.myFriends.indexOf(username) > -1) return {ok:false, reason:'already-friend'};
     if (dailyCapRemaining() <= 0) return {ok:false, reason:'daily-cap'};
     if (!burstAllow()) return {ok:false, reason:'burst-cap'};
     if (inBackoff()) return {ok:false, reason:'backoff'};
+    // RESERVE-BEFORE-SEND: increment the counter and persist BEFORE
+    // firing the network request. This way, even if the request hangs
+    // for 30s, a second auto-add tick reading state can't re-fire the
+    // same target or burn a second slot. On failure we leave the
+    // reservation in place (don't refund) — conservative.
+    S.sentRequests[username] = {ts:Date.now(), status:'pending'};
+    S.dailyCount++;
     burstRecord();
+    save();
     var resp;
     try {
       resp = await sendFriendRequest(username);
     } catch (e) {
+      // Network error — keep the slot reserved but mark as failed for visibility
+      S.sentRequests[username] = {ts:Date.now(), status:'failed', error:e.message};
       S.failedRequests[username] = {ts:Date.now(), error:e.message, status:0};
       logEvent('Add ~'+username+' failed (network): '+e.message);
       save(); render();
@@ -317,19 +366,25 @@
     }
     if (resp.status === 429) {
       S.backoffUntil = Date.now() + BACKOFF_ON_429_MS;
-      logEvent('Rate-limited (429) — backing off 5 min, auto-add paused');
+      // For 429 specifically, refund the slot — the request didn't take effect.
+      delete S.sentRequests[username];
+      S.dailyCount = Math.max(0, S.dailyCount - 1);
+      logEvent('Rate-limited (429) — refunded slot, backing off 5 min, auto-add OFF');
       S.autoAdd = false;
       save(); render();
       return {ok:false, reason:'rate-limited'};
     }
     if (!resp.ok) {
+      // Non-2xx other than 429: target rejection (e.g. blocked us, account deleted).
+      // Keep slot reserved (don't refund — slot is "spent" on a known-bad target).
+      S.sentRequests[username] = {ts:Date.now(), status:'rejected', code:resp.status};
       S.failedRequests[username] = {ts:Date.now(), error:'http_'+resp.status, status:resp.status, body:resp.body};
-      logEvent('Add ~'+username+' failed ('+resp.status+')');
+      logEvent('Add ~'+username+' rejected ('+resp.status+')');
       save(); render();
       return {ok:false, reason:'http', status:resp.status};
     }
-    S.sentRequests[username] = Date.now();
-    S.dailyCount++;
+    // Success.
+    S.sentRequests[username] = {ts:Date.now(), status:'sent'};
     logEvent('✓ Add ~'+username+' (today: '+S.dailyCount+'/'+S.dailyCap+')');
     save(); render();
     return {ok:true};
@@ -479,7 +534,19 @@
       }
       h += '</div>';
     } else {
-      var pfp = top.pfpUrl ? (top.pfpUrl.indexOf('http') === 0 ? top.pfpUrl : 'https://www.remilia.net'+top.pfpUrl) : '';
+      // v1.0.1: validate pfpUrl prefix before assigning <img src>. Only
+      // accept relative remilia.net paths and absolute https:// URLs to
+      // known remilia.net subdomains. Suppress any other shape.
+      var pfp = '';
+      if (top.pfpUrl) {
+        var raw = String(top.pfpUrl);
+        if (raw.indexOf('https://pfp.remilia.net/') === 0 ||
+            raw.indexOf('https://www.remilia.net/') === 0 ||
+            raw.indexOf('/imgproxy/') === 0 ||
+            raw.indexOf('/pfp/') === 0) {
+          pfp = raw.indexOf('http') === 0 ? raw : 'https://www.remilia.net' + raw;
+        }
+      }
       h += '<div class="rfx-card">';
       h +=   (pfp ? '<img class="rfx-pfp" src="'+escapeHtml(pfp)+'" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">' : '');
       h +=   '<div class="rfx-name">'+escapeHtml(top.displayName)+'</div>';
@@ -489,8 +556,8 @@
         h += '<div class="rfx-via">via ~'+top.via.slice(0,3).map(escapeHtml).join(', ~')+(top.via.length>3?'…':'')+'</div>';
       }
       h +=   '<div class="rfx-actions">';
-      h +=     '<button class="rfx-add" id="rfx-add">✓ Add (Space)</button>';
-      h +=     '<button class="rfx-skip" id="rfx-skip">✗ Skip (S)</button>';
+      h +=     '<button class="rfx-add" id="rfx-add">✓ Add (Enter)</button>';
+      h +=     '<button class="rfx-skip" id="rfx-skip">✗ Skip (Esc)</button>';
       h +=   '</div>';
       h +=   '<div class="rfx-hint">Profile: <a href="/~'+escapeHtml(top.username)+'" target="_blank" style="color:#7c2d12;">/~'+escapeHtml(top.username)+'</a></div>';
       h += '</div>';
@@ -552,15 +619,19 @@
      focus is not in a text input (avoids stealing keystrokes from
      chat, the search bar, etc.). */
   function setupKeyboard() {
+    // v1.0.1: Enter/Esc instead of Space/S. Space conflicts with scrolling
+    // and chat input; S is too easy to fire accidentally. Enter is the
+    // natural "yes" key and Esc is the natural "skip/cancel" key. Both
+    // are gated to skip when focus is in an input / textarea / editable.
     document.addEventListener('keydown', function(e){
       var p = document.getElementById(PANEL_ID);
       if (!p || p.classList.contains('hidden')) return;
-      var t = e.target;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (e.key === ' ' || e.code === 'Space') {
+      var ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+      if (e.key === 'Enter') {
         var top = getTopCandidate();
         if (top) { e.preventDefault(); doAdd(top.username); }
-      } else if (e.key === 's' || e.key === 'S') {
+      } else if (e.key === 'Escape') {
         var topS = getTopCandidate();
         if (topS) { e.preventDefault(); doSkip(topS.username); }
       }
