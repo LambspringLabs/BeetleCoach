@@ -1,5 +1,5 @@
 # BeetleBoy / BeetleCraft — Strategic Value Model
-_Last updated: 2026-05-17 (v12.4.20 — full rewrite for endgame state, with XP/cheese/trophies)_
+_Last updated: 2026-05-18 (v12.4.20 — empirical recipe finds added from /v/324142 thread mining)_
 
 > This document supersedes the 2026-04-07 baseline. The 2026-04-07 file optimized for "complete the basic collection." This rewrite is for a player who is **post-Adamantine** with the full core collection except a small set of endgame holdouts (Mars Rhino, Hercules-if-real, Blue Death Feigning, Black Lotus, Purple Passionflower), at Lvl 75 ~10,939 cheese. The methodology has been kept and extended.
 >
@@ -12,7 +12,30 @@ _Last updated: 2026-05-17 (v12.4.20 — full rewrite for endgame state, with XP/
 
 ---
 
-## 0. About the "Double Tesseract" claim
+## 0. The "Double Tesseract" lottery — RESOLVED 2026-05-18
+
+**Update: the user's observation is confirmed.** `2 Junk Tesseracts` placed alone in the assemble bench is a **multi-output Assemble lottery** — recipe shape is deterministic (2 JT in, no other inputs), but output is RNG across a wide menu.
+
+See `V_THREAD_FINDINGS.md` for the full provenance. Summary of observed outputs (each is one craft event, NOT all from one craft):
+
+| Output | Source / evidence |
+|---|---|
+| **Bumblebee** | Game broadcast `"YOU ASSEMBLED A Bumblebee FROM 2 Junk Tesseracts!"` (cherished, 09 May 2026) |
+| Random Mithril flower | Player report (Big Zigg, 09 May 2026) |
+| **Specimen Pin** (Adamantine artifact, rare jackpot) | Player anecdote: ~150 tesseracts to find one (~1.3% per attempt) |
+| Pond Beetle | User observation (sails, 2026-05-17) |
+| St. John's Wort | User observation (sails, 2026-05-17) |
+| 1× Junk Tesseract refund | User observation (partial-fail outcome) |
+
+**Implications:**
+- The wiki does not document this recipe — empirical mechanic.
+- `beetle.sevensevenseven.net/data.js` records the recipe as `{out:'specimen_pin', name:'Gamble for Specimen Pin'}` — Specimen Pin is the *labeled target*, but actual output distribution is a much wider menu. The Bumblebee was confirmed to be one possible output despite not appearing in the data file's labeled outputs.
+- **The Bumblebee recipe is now answered.** Wiki said `???`. It's "luck on a JT × 2 roll."
+- **Specimen Pin** drops at roughly ~1.3% per attempt (75 attempts per Pin average) per available evidence.
+
+### Original investigation (kept for record)
+
+(Below this point is the 2026-05-17 "not found" analysis, kept for context. It was correct that the wiki documents no such recipe — the resolution came from mining the /v/ thread on 2026-05-18.)
 
 **Finding: the only documented `Junk Tesseract x2 + X` recipes on the wiki produce trinkets/trophies, not beetles or flowers.**
 
@@ -229,9 +252,15 @@ Note: **Titanium Cube's recipe burns an Adamantine Pollen** — an expensive sin
 
 A Trophy is the first successful craft of a recipe. All 15 are listed in `WIKI_AUDIT.md` F.5. Five additional trophies (Milady Fumoku, Reminet ID, Deck of Cards, D20, Engraved Lighter) have unknown recipes.
 
-### Specimen Pin
+### Specimen Pin — PURPOSE CONFIRMED 2026-05-18
 
-Adamantine artifact. **Recipe undocumented.** Per v0.7 dev blog: "each user gets one free specimen pin but you'll have to find more yourself." So one is gifted, additional copies require an unknown craft or a drop. Probably ties into a Trophy creation flow not yet documented on the wiki.
+Adamantine artifact. **Recipe AND purpose now known** (see `V_THREAD_FINDINGS.md`):
+
+- **Acquisition:** rare jackpot from the `Junk Tesseract × 2` lottery (~1.3% per attempt; "150 tesseracts to find a Pin" anecdote on the /v/ thread implies ~75 attempts mean).
+- **Purpose:** **Specimen Pin + Beetle + Green sacrifice → that Beetle's Trophy variant.** Confirmed by /v/ broadcast: `"YOU SACRIFICED A Green Beetle AND SMASHED A Specimen Pin AND A Mars Rhino Beetle INTO A Mars Rhino Beetle Trophy!"`
+- **Implication:** every beetle in `ALL_BEETLES` (23 entries) can have a Trophy variant. Each trophy requires: 1 Specimen Pin + 1 copy of that beetle + 1 Green sacrifice (each consumed).
+- **Bottleneck:** Specimen Pins. To trophy the entire collection of 23 beetles requires ~23 Specimen Pins → ~1725 tesseracts (~5175 junk cubes) at average drop rate. Very long-term project.
+- **Strategy:** don't waste your one free Specimen Pin on a low-value beetle. Save it for a trophy you'd actually display (Mars Rhino is the natural choice).
 
 ---
 
@@ -469,10 +498,11 @@ Assuming **one daily-reset free smash per hammer** (and assuming the user fully 
 
 The user is at endgame. Missing: Mars Rhino, Hercules (unverified), Blue Death Feigning, Black Lotus, Purple Passionflower. **Plus the 15-trophy collection if they want to complete that.**
 
-### Phase 1: Get Purple Passionflower (Adamantine flower)
-- Easiest path: drop-farm via hunts (Adamantine flowers drop).
-- Backup: transmute an Adamantine beetle + Junk Cube → random Adamantine flower (RNG over Pincushion / Gazania / Purple Passionflower).
-- Sub-strategy: use Junk Tesseract + existing Adamantine flower → reroll to Passionflower. **This is the fastest deterministic path** (assembly, 100% rate).
+### Phase 1: Get Purple Passionflower (Adamantine flower) — RECIPE CONFIRMED 2026-05-18
+- **Primary path: `Gazania + Junk Tesseract` (Assemble)**. Confirmed by /v/324142 game broadcast: `"YOU ASSEMBLED A Purple Passionflower FROM A Gazania AND A Junk Tesseract!"`. Output is RNG across the 3 Adamantine flowers (Pincushion, Gazania, Passionflower), so naive odds ~1/3 per attempt. Mean ~3 attempts. The reroll can also return the same flower (confirmed broadcast: `Gazania + Junk Tesseract → Gazania`), so this is genuinely RNG.
+- **Cost:** 1 Junk Tesseract + 1 Adamantine flower (consumed) per attempt. With your Adamantine flower stock + 21 Tesseracts, you have ample budget.
+- Backup: transmute an Adamantine beetle + Junk Cube → random Adamantine flower (RNG over the 3 outputs).
+- Alternative: drop-farm via hunts (Adamantine flowers drop).
 
 ### Phase 2: Blue Death Feigning Beetle
 - `Purple Passionflower + Adamantine beetle (Stag) → Blue Death Feigning`. Smash.
