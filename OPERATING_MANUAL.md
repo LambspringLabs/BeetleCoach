@@ -1,6 +1,6 @@
 # BeetleCoach Operating Manual
 
-_Last updated: 2026-05-17 (v12.4.20)._
+_Last updated: 2026-05-18 (v12.4.21 — added flower rerolls + Junk Tesseract Gamble)._
 
 Practical reference for a human running the coach day-to-day, and for any future AI session that needs to understand "how the thing actually behaves at runtime" without having to re-derive it from the source.
 
@@ -223,6 +223,31 @@ The recipe is still in `RECIPES` and the Endgame chain. Coach will direct you to
 | **RNG** | Smash recipe. Probabilistic — modified by hammer Crafting Bonus and optionally a sacrifice. Failures return ingredients (recipe valid but RNG missed) OR trigger "Nothing happened" (recipe invalid, also returns ingredients). |
 | **GOAL** | The eventual chain target you're working toward. |
 | **(random sibling)** | The recipe yields ONE OF multiple possible outputs. Adamantine Flower Transmute yields a random Adamantine flower; Pinecone/Moss/Gunpowder Bridge yields one of those three artifacts. Don't expect a specific output. |
+
+## New recipes (v12.4.21)
+
+Per the /v/324142 thread mining (see `V_THREAD_FINDINGS.md`):
+
+### Flower Reroll (4 tier-specific recipes — Assemble)
+- `Junk Tesseract + Tin Flower → random Tin flower`
+- `Junk Tesseract + Bronze Flower → random Bronze flower`
+- `Junk Tesseract + Mithril Flower → random Mithril flower` (path to Fringed Iris / Larkspur for the new Mithril beetles)
+- `Junk Tesseract + Adamantine Flower → random Adamantine flower` (path to Purple Passionflower for Blue Death Feigning)
+
+These are RNG-output Assembles. The reroll **can return the same flower** as input (confirmed by game broadcast: `"YOU ASSEMBLED A Gazania FROM A Gazania AND A Junk Tesseract!"`), so mean ~3 attempts to hit a specific 1-of-3 target. Cheaper than transmutation for users with plenty of Junk Tesseracts.
+
+### Junk Tesseract Gamble (Assemble)
+- `2× Junk Tesseract` alone → lottery output
+
+Observed outputs from /v/ thread broadcasts + user testing:
+- **Bumblebee** (the only known path to this beetle — wiki said `???`)
+- Random Mithril flower
+- Specimen Pin (~1.3% rare jackpot per "150 tesseracts for a pin" anecdote)
+- Random beetle / random flower / partial 1× JT refund
+
+**When to use this:** if you have excess Junk Tesseracts and no purposeful crafts available. Specifically valuable if you're hunting Bumblebee (no other path) or grinding for Specimen Pins (the artifact that turns any owned beetle into its Trophy variant via `Specimen Pin + Beetle + Green sacrifice → Beetle Trophy`).
+
+**Coach behavior**: the Gamble has a moderate `RECIPE_VALUE` (30) — it surfaces in "You can make" but doesn't dominate progression-driving crafts. If you're stuck on a goal (e.g., need Pinecone but have no Mithril Pollen), gambling shows up as a backup option.
 
 ---
 

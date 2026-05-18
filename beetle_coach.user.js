@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.20
+// @version      12.4.21
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.20';
+  var VER = '12.4.21';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -271,7 +271,28 @@
     {label:'Tin Flower Transmute',type:'smash',inputs:['green','junk_cube_t1']},
     {label:'Bronze Flower Transmute',type:'smash',inputs:['any_bronze_beetle','junk_cube_t1']},
     {label:'Mithril Flower Transmute',type:'smash',inputs:['any_mithril_beetle','junk_cube_t1']},
-    {label:'Adamantine Flower Transmute',type:'smash',inputs:['any_adamantine_beetle','junk_cube_t1']}
+    {label:'Adamantine Flower Transmute',type:'smash',inputs:['any_adamantine_beetle','junk_cube_t1']},
+    // v12.4.21: Flower Reroll recipes (Assemble — Junk Tesseract + Flower
+    // yields a random different flower of the same tier). Confirmed by /v/324142
+    // game broadcasts (e.g. "YOU ASSEMBLED A Purple Passionflower FROM A Gazania
+    // AND A Junk Tesseract!"). RNG-output — output can include the input flower
+    // itself (broadcast: "Gazania + Junk Tesseract -> Gazania"), so mean ~3
+    // attempts to hit a specific target in a 3-flower tier. Annotated with
+    // MULTI_OUTPUT_RECIPES so the panel shows "(random sibling)".
+    {label:'Tin Flower Reroll',type:'assemble',inputs:['junk_cube_t2','any_tin_flower']},
+    {label:'Bronze Flower Reroll',type:'assemble',inputs:['junk_cube_t2','any_bronze_flower']},
+    {label:'Mithril Flower Reroll',type:'assemble',inputs:['junk_cube_t2','any_mithril_flower']},
+    {label:'Adamantine Flower Reroll',type:'assemble',inputs:['junk_cube_t2','any_adamantine_flower']},
+    // v12.4.21: Junk Tesseract Gamble (Assemble — 2 Junk Tesseracts alone
+    // yields a probabilistic output: confirmed game broadcasts include
+    // Bumblebee, random Mithril flower, Specimen Pin (~1.3% rare jackpot),
+    // and per user observation also random Pond/Wort with occasional 1x JT
+    // refund. The /v/324142 thread and beetle.sevensevenseven.net data file
+    // label this "Gamble for Specimen Pin" -- Specimen Pin is the labeled
+    // target but real distribution is much wider. See V_THREAD_FINDINGS.md.
+    // Moderate RECIPE_VALUE (30) so it surfaces as a backup option but
+    // doesn't dominate purposeful crafts.
+    {label:'Junk Tesseract Gamble',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2']}
   ];
   var RECIPE_VALUE = {
     'Hercules Beetle':100,'Mars Rhino Beetle':95,'Black Lotus':88,'Diamond Hammer':82,
@@ -289,6 +310,14 @@
     'Bronze Hammer':15,'Bronze Pollen':12,
     'Tin Flower Transmute':4,'Bronze Flower Transmute':10,'Mithril Flower Transmute':35,
     'Adamantine Flower Transmute':55,
+    // v12.4.21: Flower Rerolls + Junk Tesseract Gamble. Reroll values
+    // reflect that the user typically has plenty of JTs but the tier's
+    // flowers may be a bottleneck (Adamantine especially). Adamantine
+    // Reroll set above Transmute because it's the cheapest path to the
+    // missing Passionflower for endgame collection.
+    'Tin Flower Reroll':4,'Bronze Flower Reroll':10,'Mithril Flower Reroll':40,
+    'Adamantine Flower Reroll':60,
+    'Junk Tesseract Gamble':30,
     'Junk Tesseract':8,'Tin Hammer':6,'Tin Pollen':5,'Junk Cube':1
   };
   var RECIPE_OUTPUT = {
@@ -315,8 +344,16 @@
     'pollen_tin':['Tin Pollen'],'pollen_bronze':['Bronze Pollen'],
     'pollen_mithril':['Mithril Pollen'],'pollen_adamantine':['Adamantine Pollen'],
     // v12.4.18: passionflower needed for Blue Death Feigning
-    'gazania':['Adamantine Flower Transmute'],'pincushion':['Adamantine Flower Transmute'],
-    'passionflower':['Adamantine Flower Transmute'],
+    // v12.4.21: Adamantine Flower Reroll added as alternative path
+    // (cheaper for users with plenty of JTs; same RNG over the 3
+    // Adamantine flowers). Order matters — Reroll listed first so the
+    // progression engine prefers it when both are craftable.
+    'gazania':['Adamantine Flower Reroll','Adamantine Flower Transmute'],
+    'pincushion':['Adamantine Flower Reroll','Adamantine Flower Transmute'],
+    'passionflower':['Adamantine Flower Reroll','Adamantine Flower Transmute'],
+    // v12.4.21: Mithril Flower Reroll for new special flowers
+    'fringed_iris':['Mithril Flower Reroll','Mithril Flower Transmute'],
+    'larkspur':['Mithril Flower Reroll','Mithril Flower Transmute'],
     'any_adamantine_beetle':['Goliath Beetle','Stag Beetle','Bombardier Beetle'],
     'junk_cube_t1':['Junk Cube'],'junk_cube_t2':['Junk Tesseract']
   };
@@ -374,7 +411,17 @@
     'Tin Flower Transmute',
     'Bronze Flower Transmute',
     'Mithril Flower Transmute',
-    'Adamantine Flower Transmute'
+    'Adamantine Flower Transmute',
+    // v12.4.21: Flower Rerolls + Junk Tesseract Gamble — all RNG output.
+    // The Gamble has the widest output menu (Bumblebee / Mithril flower /
+    // Specimen Pin / random beetle / partial refund) so its "(random
+    // sibling)" annotation understates the variance — consider promoting
+    // to a stronger "(LOTTERY)" badge in a future revision.
+    'Tin Flower Reroll',
+    'Bronze Flower Reroll',
+    'Mithril Flower Reroll',
+    'Adamantine Flower Reroll',
+    'Junk Tesseract Gamble'
   ]);
   var BLOCKLIST = /^(svg|icon|button|slot|empty|more|smash|eject|assemble|home|search|left|right|go_back|show_password|claim|load|logo|dots|arrow|cheeseman|static\d*|beetleboy_logo|beetle_catch|craft|beetle_shader)$/i;
   var PFP_HASH = /^(pfp_\d+|retart|remilio|radbro|default|[a-f0-9]{20,})$/i;
