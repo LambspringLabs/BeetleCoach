@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.23
+// @version      12.4.24
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.23';
+  var VER = '12.4.24';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -687,15 +687,54 @@
     S.timers = t;
   }
   function parseHammer() {
-    var owned = [], broken = [], discovered = [];
+    // v12.4.24: distinguish "in bench / held" from "broken". v12.4.23 marked
+    // any --empty hammer-row slot as broken; the user reported a false
+    // positive ("just in smash / held state, not broken"). Both states share
+    // the --empty class — the row DOM alone can't reliably distinguish them.
+    // Strategy: only flag as truly broken when the slot has an explicit
+    // broken indicator (--broken modifier class or a child broken element).
+    // Otherwise, treat --empty slots as "held" — still owned, just temporarily
+    // in the smash bench. The user can verify by glancing at the in-game UI.
+    var owned = [], broken = [], held = [], discovered = [];
     document.querySelectorAll('.crafting-module__hammer-row .crafting-module__hammer-slot').forEach(function(s) {
       if (s.classList.contains('crafting-module__hammer-slot--undiscovered')) return;
       var img = s.querySelector('.crafting-module__beetle-img'); if (!img) return;
       var k = resolveItemKey(s, img);
-      if (k && k.indexOf('hammer_t') === 0) { discovered.push(k); if (s.classList.contains('crafting-module__hammer-slot--empty')) broken.push(k); else owned.push(k); }
+      if (k && k.indexOf('hammer_t') === 0) {
+        discovered.push(k);
+        if (s.classList.contains('crafting-module__hammer-slot--empty')) {
+          var trulyBroken = s.classList.contains('crafting-module__hammer-slot--broken') ||
+                            !!s.querySelector('.crafting-module__hammer-slot-broken-indicator') ||
+                            !!s.querySelector('[class*="--broken"], [class*="broken-indicator"]');
+          if (trulyBroken) broken.push(k); else held.push(k);
+        } else {
+          owned.push(k);
+        }
+      }
     });
     function dedupe(a) { var s = {}; return a.filter(function(v) { return s[v] ? false : (s[v]=true); }); }
-    S.ownedHammers = dedupe(owned).sort(function(a,b) { return HAMMER_TIERS.indexOf(b) - HAMMER_TIERS.indexOf(a); });
+    // Held hammers count as owned for crafting purposes — user has them, just
+    // staged in the bench. They're listed separately in S.heldHammers so the
+    // UI can show a "currently in bench" hint if helpful.
+    var prevOwnedFull = new Set(S.ownedHammers || []);
+    var allOwned = dedupe(owned.concat(held)).sort(function(a,b) { return HAMMER_TIERS.indexOf(b) - HAMMER_TIERS.indexOf(a); });
+    var nowFullyOwned = new Set(owned);
+    // v12.4.24: detect smash events via slot transition. If a hammer was
+    // previously fully owned (slot filled, not --empty) and is now held or
+    // missing from owned (slot --empty), the user just smashed with it. This
+    // is a backup signal for when the chat broadcast was missed (chat hidden,
+    // BC restarted mid-day, broadcast format changed, etc.).
+    prevOwnedFull.forEach(function(h) {
+      if (!nowFullyOwned.has(h) && allOwned.indexOf(h) > -1) {
+        S.hammerSmashedSince = S.hammerSmashedSince || {};
+        if (!S.hammerSmashedSince[h]) {
+          S.hammerSmashedSince[h] = Date.now();
+          logEvent('Smash inferred (hammer ' + dn(h) + ' moved to bench/broken).');
+        }
+      }
+    });
+    S.ownedHammers = allOwned;
+    S.heldHammers = dedupe(held);
     S.brokenHammers = dedupe(broken); S.discoveredHammers = dedupe(discovered);
     S.currentHammer = S.ownedHammers[0] || null;
     var st = S.currentHammer ? HAMMER_STATS[S.currentHammer] : null;
@@ -888,13 +927,17 @@
     return smash < ubc;
   }
   function hammerIsFresh(hammerKey) {
-    // v12.4.23: per-hammer free-smash check. True if this hammer hasn't been
-    // smashed since the last UBC daily reset. Boot state (no UBC tracked
-    // yet) treated optimistically as fresh.
+    // v12.4.24: tightened — require a script-observed UBC. v12.4.23's
+    // optimistic "no UBC observed yet → fresh" default was a footgun: any
+    // time the chat container hadn't attached, BC restarted mid-day, or a
+    // smash broadcast was missed, BC happily showed FREE when the hammer
+    // had clearly already been used (5% break visible in panel). Now FREE
+    // requires (a) we observed a UBC claim, AND (b) we haven't seen a
+    // smash since. No UBC observation → USED by default.
     if (!hammerKey) return false;
     var ubc = S.lastUbcAt || 0;
+    if (!ubc) return false;
     var smashed = (S.hammerSmashedSince && S.hammerSmashedSince[hammerKey]) || 0;
-    if (!ubc && !smashed) return true;
     return smashed < ubc;
   }
   function freeSmashSummary() {
@@ -1610,7 +1653,7 @@
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
     var s = document.createElement('style'); s.id = STYLE_ID;
-    s.textContent = '#'+BTN_ID+'{position:fixed;left:20px;bottom:20px;z-index:999999;padding:10px 14px;background:#d7f4f7;color:#11383d;border:1px solid #9bd8e0;border-radius:12px;font-weight:700;cursor:pointer;font-size:14px;}#'+BTN_ID+':hover{background:#c0edf2;}#'+PANEL_ID+'{position:fixed;left:20px;top:50px;z-index:999999;width:380px;min-width:300px;max-width:90vw;background:#fff;border:2px solid #b8e6ec;border-radius:16px;padding:16px;box-shadow:0 14px 40px rgba(0,0,0,.18);font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;color:#163238;max-height:calc(100vh - 70px);display:flex;flex-direction:column;gap:6px;overflow:hidden;resize:both;}#'+PANEL_ID+'.hidden{display:none!important;}.bc8-header{display:flex;align-items:center;justify-content:space-between;cursor:grab;user-select:none;padding-bottom:4px;border-bottom:1px solid #e8f4f7;margin-bottom:2px;}.bc8-header:active{cursor:grabbing;}.bc8-title{font-size:18px;font-weight:800;}.bc8-sub{font-size:11px;color:#5a7379;font-weight:700;}.bc8-btns{display:flex;gap:3px;flex-wrap:wrap;}.bc8-btn{background:#d9f2f6;color:#17363b;border:1px solid #b8e6ec;border-radius:6px;padding:4px 7px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;}.bc8-btn:hover{background:#c0edf2;}.bc8-btn.on{background:#17363b;color:#fff;}.bc8-strip{display:flex;flex-wrap:wrap;gap:6px;padding:8px;background:#f7fcfd;border:1px solid #e0f0f3;border-radius:8px;font-size:11px;flex-shrink:0;}.bc8-strip-item{display:flex;align-items:center;gap:3px;}.bc8-strip-label{color:#6b8a90;font-weight:600;}.bc8-badge{display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;}.bc8-ready{background:#d4edda;color:#155724;}.bc8-countdown{background:#fff3cd;color:#856404;}.bc8-stale{background:#f8d7da;color:#721c24;}.bc8-fresh{background:#d4edda;color:#155724;}.bc8-card{background:#fafeff;border:1px solid #d5eef2;border-radius:8px;padding:8px;flex-shrink:0;}.bc8-focus{background:#f0f9fb;border:1px solid #b8e6ec;border-radius:8px;padding:10px;flex-shrink:0;}.bc8-scroll{background:#fafeff;border:1px solid #d5eef2;border-radius:10px;padding:8px;overflow-y:auto;overflow-x:hidden;flex-shrink:1;flex-grow:1;min-height:60px;}.bc8-scroll::-webkit-scrollbar{width:5px;}.bc8-scroll::-webkit-scrollbar-thumb{background:#b8e6ec;border-radius:3px;}.bc8-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;font-size:11px;line-height:1.4;}.bc8-row-name{display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%;}.bc8-h{font-weight:800;font-size:13px;margin-bottom:6px;color:#11383d;}.bc8-muted{color:#6b8a90;font-size:10px;}.bc8-tier{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;color:#fff;flex-shrink:0;letter-spacing:0.2px;}.bc8-free{background:#22c55e;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:0.3px;}.bc8-free-used{background:#94a3b8;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;}.bc8-compress{background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:8px;flex-shrink:0;font-size:11px;}.bc8-compress-h{font-weight:800;font-size:12px;color:#854d0e;margin-bottom:4px;}.bc8-pin{background:#fdf2f8;border:1px solid #f9a8d4;border-radius:8px;padding:6px;flex-shrink:0;font-size:11px;color:#831843;font-weight:700;}.bc8-val{font-weight:700;text-align:right;white-space:nowrap;font-size:11px;}.bc8-recipe{padding:3px 0;border-bottom:1px solid #eef5f7;}.bc8-recipe:last-child{border-bottom:none;}.bc8-recipe-name{font-weight:700;font-size:11px;}.bc8-log-line{font-size:9px;color:#6b8a90;line-height:1.4;border-bottom:1px solid #f0f7f9;padding:1px 0;}.bc8-state{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#e8f4f7;color:#11383d;}';
+    s.textContent = '#'+BTN_ID+'{position:fixed;left:20px;bottom:20px;z-index:999999;padding:10px 14px;background:#d7f4f7;color:#11383d;border:1px solid #9bd8e0;border-radius:12px;font-weight:700;cursor:pointer;font-size:14px;}#'+BTN_ID+':hover{background:#c0edf2;}#'+PANEL_ID+'{position:fixed;left:20px;top:50px;z-index:999999;width:380px;min-width:300px;max-width:90vw;background:#fff;border:2px solid #b8e6ec;border-radius:16px;padding:16px;box-shadow:0 14px 40px rgba(0,0,0,.18);font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;font-size:12px;color:#163238;max-height:calc(100vh - 70px);display:flex;flex-direction:column;gap:6px;overflow:hidden;resize:both;}#'+PANEL_ID+'.hidden{display:none!important;}.bc8-header{display:flex;align-items:center;justify-content:space-between;cursor:grab;user-select:none;padding-bottom:4px;border-bottom:1px solid #e8f4f7;margin-bottom:2px;}.bc8-header:active{cursor:grabbing;}.bc8-title{font-size:18px;font-weight:800;}.bc8-sub{font-size:11px;color:#5a7379;font-weight:700;}.bc8-btns{display:flex;gap:3px;flex-wrap:wrap;}.bc8-btn{background:#d9f2f6;color:#17363b;border:1px solid #b8e6ec;border-radius:6px;padding:4px 7px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;}.bc8-btn:hover{background:#c0edf2;}.bc8-btn.on{background:#17363b;color:#fff;}.bc8-strip{display:flex;flex-wrap:wrap;gap:6px;padding:8px;background:#f7fcfd;border:1px solid #e0f0f3;border-radius:8px;font-size:11px;flex-shrink:0;}.bc8-strip-item{display:flex;align-items:center;gap:3px;}.bc8-strip-label{color:#6b8a90;font-weight:600;}.bc8-badge{display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;}.bc8-ready{background:#d4edda;color:#155724;}.bc8-countdown{background:#fff3cd;color:#856404;}.bc8-stale{background:#f8d7da;color:#721c24;}.bc8-fresh{background:#d4edda;color:#155724;}.bc8-card{background:#fafeff;border:1px solid #d5eef2;border-radius:8px;padding:8px;flex-shrink:0;}.bc8-focus{background:#f0f9fb;border:1px solid #b8e6ec;border-radius:8px;padding:10px;flex-shrink:0;}.bc8-scroll{background:#fafeff;border:1px solid #d5eef2;border-radius:10px;padding:8px;overflow-y:auto;overflow-x:hidden;flex-shrink:1;flex-grow:1;min-height:60px;}.bc8-scroll::-webkit-scrollbar{width:5px;}.bc8-scroll::-webkit-scrollbar-thumb{background:#b8e6ec;border-radius:3px;}.bc8-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;font-size:11px;line-height:1.4;}.bc8-row-name{display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%;}.bc8-h{font-weight:800;font-size:14px;margin-bottom:6px;color:#11383d;}.bc8-muted{color:#6b8a90;font-size:10px;}.bc8-tier{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;color:#fff;flex-shrink:0;letter-spacing:0.2px;}.bc8-free{background:#22c55e;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:0.3px;}.bc8-free-used{background:#94a3b8;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;}.bc8-compress{background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:8px;flex-shrink:0;font-size:11px;}.bc8-compress-h{font-weight:800;font-size:12px;color:#854d0e;margin-bottom:4px;}.bc8-pin{background:#fdf2f8;border:1px solid #f9a8d4;border-radius:8px;padding:6px;flex-shrink:0;font-size:11px;color:#831843;font-weight:700;}.bc8-val{font-weight:700;text-align:right;white-space:nowrap;font-size:11px;}.bc8-recipe{padding:3px 0;border-bottom:1px solid #eef5f7;}.bc8-recipe:last-child{border-bottom:none;}.bc8-recipe-name{font-weight:700;font-size:11px;}.bc8-log-line{font-size:9px;color:#6b8a90;line-height:1.4;border-bottom:1px solid #f0f7f9;padding:1px 0;}.bc8-state{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#e8f4f7;color:#11383d;}';
     document.head.appendChild(s);
   }
   function refreshTimerDisplay() {
@@ -1663,7 +1706,7 @@
     if (S.ownedHammers && S.ownedHammers.length > 0) {
       var fs = freeSmashSummary();
       var tip = fs.perHammer.map(function(hh){return hh.label+': '+(hh.fresh?'\u26a1 free':'used');}).join('\n');
-      tip += '\n\nFree smashes reset at the next UBC daily cheese claim.\nNote: each detected smash is attributed to your highest-tier non-broken hammer (S.currentHammer).\nIf you manually select a lower hammer in the bench, the indicator may be wrong.';
+      tip += '\n\nFree smashes reset at the next UBC daily cheese claim.\nv12.4.24: requires a script-observed UBC claim to display FREE.\nOn boot (no UBC tracked yet), all hammers default to USED until next claim.\nSmash detection: chat broadcast OR hammer-row slot transitioning to bench.\nIf you select a lower hammer manually, attribution may be wrong.';
       // v12.4.23: three-tier badge color \u2014 green=all free, yellow=partial, gray=all used.
       var badgeCls, letters = fs.perHammer.map(function(hh){return hh.abbr + (hh.fresh ? '\u26a1' : '\u00b7');}).join(' ');
       if (fs.freeCount === fs.totalOwned) {
@@ -1676,6 +1719,7 @@
       var label = fs.freeCount === 0 ? 'all used' : ('\u26a1 '+fs.freeCount+'/'+fs.totalOwned+' free');
       h += '<div class="bc8-strip-item" title="'+tip.replace(/"/g,'&quot;')+'"><span class="'+badgeCls+'" style="padding:2px 6px;border-radius:4px;font-size:10px;font-weight:800;">'+label+'</span>' + (fs.totalOwned > 1 ? ' <span style="font-size:9px;color:#475569;font-weight:600;">'+letters+'</span>' : '') + '</div>';
     }
+    if (S.heldHammers&&S.heldHammers.length) h += '<div class="bc8-strip-item" title="Hammer is in the smash bench / held state. Still owned, just staged."><span style="color:#0891b2;font-weight:700;">Bench:</span> '+S.heldHammers.map(dn).join(', ')+'</div>';
     if (S.brokenHammers&&S.brokenHammers.length) h += '<div class="bc8-strip-item"><span style="color:#e74c3c;font-weight:700;">Broken:</span> '+S.brokenHammers.map(dn).join(', ')+'</div>';
     h += '<div class="bc8-strip-item"><span class="bc8-strip-label">Claim:</span> <span id="bc8-t-claim">'+fmt(S.timers.beetleCatch)+'</span></div>';
     h += '<div class="bc8-strip-item"><span class="bc8-strip-label">Hunt:</span> <span id="bc8-t-hunt">'+fmt(S.timers.huntCooldown)+'</span></div>';
@@ -1700,7 +1744,7 @@
       var chainForDisplay = S.strategy === 'flowers' ? FLOWER_CHAIN : (S.strategy === 'broad' ? BROAD_CHAIN : ENDGAME_CHAIN);
       var chainEntry = chainForDisplay.find(function(c){return c.key===prog.goal;});
       var goalRecipe = chainEntry ? RECIPES.find(function(r){return r.label===chainEntry.recipe;}) : null;
-      h += '<div style="font-weight:800;font-size:14px;">'+dn(prog.goal)+' <span class="bc8-badge bc8-fresh">GOAL</span></div>';
+      h += '<div style="font-weight:800;font-size:15px;line-height:1.3;">'+dn(prog.goal)+' <span class="bc8-badge bc8-fresh" style="font-size:9px;vertical-align:middle;">GOAL</span></div>';
       // v12.4.20: annotate multi-output recipes so the user doesn't read the
       // recipe line as deterministic. E.g. "\ud83c\udfaf Gazania recipe: Adamantine
       // beetle + Junk Cube" \u2192 "...Junk Cube (random sibling)" because the
@@ -1717,7 +1761,12 @@
     }
     var shown = 0; for (var ci = 0; ci < crafts.length && shown < 3; ci++) {
       if (prog && crafts[ci].label === prog.label) continue;
-      h += '<div style="margin-top:4px;"><span style="font-weight:700;">'+crafts[ci].label+'</span> '+(crafts[ci].type==='assemble'?'<span class="bc8-badge bc8-fresh">SAFE</span>':'<span class="bc8-badge bc8-countdown">RNG</span>')+'</div>';
+      // v12.4.24: explicit 11px font + 9px badges. Without these, alternates
+      // inherited the panel's bare default (~16px before v12.4.24's 12px base)
+      // and visually overpowered the GOAL/header — the opposite of the
+      // intended hierarchy. Hierarchy now: header 14px > GOAL 15px >
+      // alternates 11px > muted inputs 10px.
+      h += '<div style="margin-top:4px;font-size:11px;line-height:1.3;"><span style="font-weight:700;">'+crafts[ci].label+'</span> '+(crafts[ci].type==='assemble'?'<span class="bc8-badge bc8-fresh" style="font-size:9px;vertical-align:middle;">SAFE</span>':'<span class="bc8-badge bc8-countdown" style="font-size:9px;vertical-align:middle;">RNG</span>')+'</div>';
       h += '<div class="bc8-muted">'+crafts[ci].inputs.map(tokHuman).join(' + ')+'</div>'; shown++;
     }
     if (prog && prog.type==='blocked') { h += '<div class="bc8-muted" style="margin-top:4px;border-top:1px solid #e8f4f7;padding-top:4px;"><b>Goal: '+dn(prog.goal)+'</b> \u2014 '+prog.reason; if (prog.via) h += '<br><span style="color:#5b8dd9;">\u2192 '+prog.via+'</span>'; h += '</div>'; }
