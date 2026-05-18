@@ -1780,11 +1780,13 @@
     if (pinCount > 0) {
       h += '<div class="bc8-pin">\uD83D\uDC8E '+pinCount+' Specimen Pin'+(pinCount>1?'s':'')+' \u00B7 save for highest-tier Beetle Trophy (Pin + Beetle + Green sac)</div>';
     }
-    // v12.4.22: Junk Compress advisor card. Show when raw junk is plentiful
-    // (\u2265 30) OR when junk is bottlenecking other crafts. Math: raw \u2192 cubes
-    // \u2192 tesseracts. Live session counter populated by chat broadcast parser.
+    // v12.4.22: Junk Compress advisor card. Show only when raw junk is actually
+    // worth compressing. v12.4.24: dropped the "currentCubes < 5" trigger \u2014
+    // it surfaced the card even when the user had little/no junk to compress
+    // (false advice). Now requires at least 20 raw junk (10 cubes worth) so
+    // the card only shows when meaningful action is available.
     var jc = computeJunkCompress(inv);
-    if (jc.raw >= 30 || jc.currentCubes < 5) {
+    if (jc.raw >= 20) {
       h += '<div class="bc8-compress"><div class="bc8-compress-h">\uD83D\uDDDC Junk Compression</div>';
       h += '<div>Raw junk: <b>'+jc.raw+'</b> \u2192 <b>'+jc.possibleCubesFromRaw+'</b> Cubes possible (have <b>'+jc.currentCubes+'</b>)</div>';
       h += '<div>Cubes available: <b>'+jc.totalCubesAfterCompress+'</b> \u2192 <b>'+jc.possibleTess+'</b> Tesseracts possible (have <b>'+jc.currentTess+'</b>)</div>';
