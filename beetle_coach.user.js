@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.21
+// @version      12.4.22
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.21';
+  var VER = '12.4.22';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -467,6 +467,12 @@
       autoClaim:true, autoHunt:true, paused:false, panelOpen:true, level:null, craftMode:null, strategy:'endgame',
       log:[], machineState:'BOOTING', stateEnteredAt:Date.now(), lastActionAt:0, stuckReloads:0,
       disconnectedSince:0, disconnectReloads:0,
+      // v12.4.22: chat monitor + compact mode + free-smash tracking
+      compact:false,         // collapse panel to essentials when true
+      lastUbcAt:0,           // last UBC daily-cheese claim timestamp (resets hammer break-chance)
+      lastSmashAt:0,         // last detected smash from chat broadcast (used to gate the daily 0%-break indicator)
+      craftCounters:{},      // {recipeOutputKey: countThisSession} — incremented by chat broadcast parser
+      myUsername:'sails',    // user's chat display name (matched against broadcast author)
       session:defaultSession() };
   }
   function normalizeSession(rawSession) {
@@ -533,6 +539,11 @@
     if (_huntRetryTimer) clearTimeout(_huntRetryTimer);
     _huntRetryTimer = setTimeout(function() {
       _huntRetryTimer = null;
+      // v12.4.22: respect S.paused. Previously, a hunt-retry scheduled
+      // pre-pause could fire ~3.5s after the user paused, doing one more
+      // hunt attempt before the state-machine dispatch noticed pause.
+      // Now we bail explicitly. Logged in LESSONS_LEARNED.md §8.
+      if (S.paused) return;
       if (S.machineState === 'HUNTING') handleHunting();
     }, ms || HUNT_RETRY_DELAY);
   }
@@ -677,6 +688,123 @@
   }
   function parseCraftMode() { var cm = document.querySelector('.crafting-module'); S.craftMode = cm ? (cm.classList.contains('crafting-module--smash') ? 'Smash' : 'Assemble') : null; }
   function isFresh() { return Date.now() - (S.lastPassiveScan||0) < STALE_MS || Date.now() - (S.lastFullScan||0) < STALE_MS; }
+
+  /* ═══════════════════════════════════════════════════════
+     5.5. CHAT BROADCAST MONITOR (v12.4.22)
+     ═══════════════════════════════════════════════════════
+     Watches the Global Chat element for the user's own crafting
+     broadcasts. Parses the game's deterministic message templates
+     and updates:
+       - S.lastSmashAt       (for free-smash indicator gating)
+       - S.craftCounters[k]  (per-output session count)
+       - S.session.gains     (when a beetle output is detected)
+       - S.log               (added "Chat: ..." entries for visibility)
+
+     The chat element on remilia.net is rendered server-side; we
+     don't have a stable class to query. We use a tolerant selector
+     and silently skip if not found. Runs each tick — see tick().
+     Observation-only; safe to run while paused. */
+  var _lastChatSig = '';
+  function parseChatBroadcast(text) {
+    if (!text) return null;
+    // Long-form ASSEMBLE: "YOU ASSEMBLED A <out> FROM <ingredients>!"
+    var m = text.match(/YOU ASSEMBLED\s+(?:A|AN|\d+)?\s*([A-Za-z][A-Za-z'\- ]+?)(?:\s+TROPHY)?\s+FROM/i);
+    if (m) return {type:'assemble', output:m[1].trim().toLowerCase().replace(/\s+/g,'_'), raw:text};
+    // Long-form SMASH: "YOU SACRIFICED A <sac> AND SMASHED <ing> INTO A <out>!"
+    m = text.match(/AND SMASHED.+?INTO\s+(?:A|AN|\d+)?\s*([A-Za-z][A-Za-z'\- ]+?)(?:\s+TROPHY)?\s*!/i);
+    if (m) return {type:'smash', output:m[1].trim().toLowerCase().replace(/\s+/g,'_'), raw:text};
+    // Trophy short-form: "🏆 Crafted [[item_key]]!" or similar emoji prefix
+    m = text.match(/Crafted\s+\[\[([a-z0-9_]+)\]\]/i);
+    if (m) return {type:'trophy', output:m[1].toLowerCase(), raw:text};
+    return null;
+  }
+  function findChatContainer() {
+    // Tolerant lookup — chat element class isn't stable. Try several patterns.
+    var candidates = [
+      '.messages',
+      '[class*="global-chat"] .messages',
+      '[class*="GlobalChat"] .messages',
+      '[class*="chat-messages"]',
+      '[class*="chat"] [class*="messages"]'
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      var el = document.querySelector(candidates[i]);
+      if (el && el.children && el.children.length > 0) return el;
+    }
+    return null;
+  }
+  function pollChat() {
+    // Read latest chat line, parse if it's a craft broadcast from the user.
+    // No-op safe: returns silently if chat element not present.
+    try {
+      var chat = findChatContainer();
+      if (!chat) return;
+      var lines = chat.children;
+      if (!lines || !lines.length) return;
+      // Inspect the last ~10 lines for any new broadcasts since the last poll
+      var startIdx = Math.max(0, lines.length - 10);
+      var sigUpdated = false;
+      for (var i = startIdx; i < lines.length; i++) {
+        var ln = lines[i];
+        var text = (ln.textContent || '').trim();
+        if (!text || text.length < 5) continue;
+        var sig = text.slice(0, 200);
+        // sig comparison: each line in chat is unique enough; if sig matches
+        // the last-seen, we've caught up. Continue past matches in case
+        // there are multiple lines with same prefix.
+        if (sig === _lastChatSig) continue;
+        // Only process if this is the user's own broadcast — match username.
+        var myName = (S.myUsername || 'sails').toLowerCase();
+        if (text.toLowerCase().indexOf(myName) < 0) continue;
+        var bc = parseChatBroadcast(text);
+        if (!bc) continue;
+        // Record
+        if (bc.type === 'smash' || bc.type === 'assemble') S.lastSmashAt = Date.now();
+        S.craftCounters = S.craftCounters || {};
+        S.craftCounters[bc.output] = (S.craftCounters[bc.output] || 0) + 1;
+        // If output is a collectible beetle, add to session.gains
+        if (ALL_BEETLES.indexOf(bc.output) > -1 && bc.output !== 'green') {
+          S.session.gains.push(dn(bc.output));
+        }
+        // Log it (terse — recipe broadcast already gives full context)
+        logEvent('Chat: ' + bc.type + ' → ' + dn(bc.output));
+        sigUpdated = true;
+      }
+      if (sigUpdated || _lastChatSig === '') {
+        // Update _lastChatSig to the most recent line so next poll starts from there
+        var lastLn = lines[lines.length - 1];
+        _lastChatSig = (lastLn.textContent || '').trim().slice(0, 200);
+        save();
+      }
+    } catch (e) { /* defensive: chat structure may change; skip silently */ }
+  }
+  function dailyFreeSmashAvailable() {
+    // Free 0%-break smash is available when no smash has happened since the
+    // last UBC daily reset. If we've never tracked either, default to "unknown"
+    // and show as available (optimistic but harmless).
+    var ubc = S.lastUbcAt || 0;
+    var smash = S.lastSmashAt || 0;
+    if (!ubc && !smash) return true; // boot state, no info
+    return smash < ubc;
+  }
+  function computeJunkCompress(inv) {
+    // Returns: {raw, possibleCubesFromRaw, currentCubes, totalCubesAfterCompress, possibleTess, currentTess, sessionCubesCrafted, sessionTessCrafted}
+    var raw = cnt(inv, ANY_JUNK);
+    var currentCubes = inv['junk_cube_t1'] || 0;
+    var currentTess = inv['junk_cube_t2'] || 0;
+    var possibleCubesFromRaw = Math.floor(raw / 2);
+    var totalCubesAfterCompress = currentCubes + possibleCubesFromRaw;
+    var possibleTess = Math.floor(totalCubesAfterCompress / 3);
+    var cc = (S.craftCounters && S.craftCounters.junk_cube_t1) || (S.craftCounters && S.craftCounters.junk_cube) || 0;
+    var tc = (S.craftCounters && S.craftCounters.junk_cube_t2) || (S.craftCounters && S.craftCounters.junk_tesseract) || 0;
+    return {
+      raw:raw, currentCubes:currentCubes, currentTess:currentTess,
+      possibleCubesFromRaw:possibleCubesFromRaw,
+      totalCubesAfterCompress:totalCubesAfterCompress,
+      possibleTess:possibleTess,
+      sessionCubesCrafted:cc, sessionTessCrafted:tc
+    };
+  }
 
   /* ═══════════════════════════════════════════════════════
      6. RECOMMENDATION ENGINE
@@ -895,6 +1023,10 @@
     var btn = findCheeseClaimButton();
     if (!btn) return 'no-button';
     if (!safeClick(btn)) return 'click-failed';
+    // v12.4.22: track UBC timestamp — daily cheese claim is the daily reset
+    // event that returns every hammer's Current Break Chance to 0% (per the
+    // wiki + protips). The Free-Smash indicator uses this.
+    S.lastUbcAt = Date.now();
     S.session.cheeseClaims++; S.lastActionAt = Date.now(); logEvent('Auto-claimed daily cheese!'); save();
     return 'fired';
   }
@@ -1108,6 +1240,11 @@
      ═══════════════════════════════════════════════════════ */
   function tick() {
     parseTimers(); refreshTimerDisplay();
+    // v12.4.22: chat broadcast monitor runs every tick (observation-only,
+    // safe under pause). Updates S.lastSmashAt + S.craftCounters from
+    // visible game broadcasts so the free-smash indicator + junk compress
+    // session counter stay live without waiting for the next full scan.
+    pollChat();
     // Master pause: skip ALL automation but keep the panel + timers
     // refreshing. Lets the user navigate freely (craft, browse) while
     // still seeing recipe guidance from the coach. No nav, no scan, no
@@ -1347,7 +1484,7 @@
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
     var s = document.createElement('style'); s.id = STYLE_ID;
-    s.textContent = '#'+BTN_ID+'{position:fixed;left:20px;bottom:20px;z-index:999999;padding:10px 14px;background:#d7f4f7;color:#11383d;border:1px solid #9bd8e0;border-radius:12px;font-weight:700;cursor:pointer;font-size:14px;}#'+BTN_ID+':hover{background:#c0edf2;}#'+PANEL_ID+'{position:fixed;left:20px;top:50px;z-index:999999;width:380px;min-width:300px;max-width:90vw;background:#fff;border:2px solid #b8e6ec;border-radius:16px;padding:16px;box-shadow:0 14px 40px rgba(0,0,0,.18);font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;color:#163238;max-height:calc(100vh - 70px);display:flex;flex-direction:column;gap:6px;overflow:hidden;resize:both;}#'+PANEL_ID+'.hidden{display:none!important;}.bc8-header{display:flex;align-items:center;justify-content:space-between;cursor:move;user-select:none;padding-bottom:4px;border-bottom:1px solid #e8f4f7;margin-bottom:2px;}.bc8-title{font-size:18px;font-weight:800;}.bc8-sub{font-size:11px;color:#5a7379;font-weight:700;}.bc8-btns{display:flex;gap:3px;flex-wrap:wrap;}.bc8-btn{background:#d9f2f6;color:#17363b;border:1px solid #b8e6ec;border-radius:6px;padding:4px 7px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;}.bc8-btn:hover{background:#c0edf2;}.bc8-btn.on{background:#17363b;color:#fff;}.bc8-strip{display:flex;flex-wrap:wrap;gap:6px;padding:8px;background:#f7fcfd;border:1px solid #e0f0f3;border-radius:8px;font-size:11px;flex-shrink:0;}.bc8-strip-item{display:flex;align-items:center;gap:3px;}.bc8-strip-label{color:#6b8a90;font-weight:600;}.bc8-badge{display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;}.bc8-ready{background:#d4edda;color:#155724;}.bc8-countdown{background:#fff3cd;color:#856404;}.bc8-stale{background:#f8d7da;color:#721c24;}.bc8-fresh{background:#d4edda;color:#155724;}.bc8-card{background:#fafeff;border:1px solid #d5eef2;border-radius:8px;padding:8px;flex-shrink:0;}.bc8-focus{background:#f0f9fb;border:1px solid #b8e6ec;border-radius:8px;padding:10px;flex-shrink:0;}.bc8-scroll{background:#fafeff;border:1px solid #d5eef2;border-radius:10px;padding:8px;overflow-y:auto;overflow-x:hidden;flex-shrink:1;flex-grow:1;min-height:60px;}.bc8-scroll::-webkit-scrollbar{width:5px;}.bc8-scroll::-webkit-scrollbar-thumb{background:#b8e6ec;border-radius:3px;}.bc8-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;font-size:11px;line-height:1.4;}.bc8-row-name{display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%;}.bc8-h{font-weight:800;font-size:13px;margin-bottom:6px;color:#11383d;}.bc8-muted{color:#6b8a90;font-size:10px;}.bc8-tier{font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;color:#fff;flex-shrink:0;}.bc8-val{font-weight:700;text-align:right;white-space:nowrap;font-size:11px;}.bc8-recipe{padding:3px 0;border-bottom:1px solid #eef5f7;}.bc8-recipe:last-child{border-bottom:none;}.bc8-recipe-name{font-weight:700;font-size:11px;}.bc8-log-line{font-size:9px;color:#6b8a90;line-height:1.4;border-bottom:1px solid #f0f7f9;padding:1px 0;}.bc8-state{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#e8f4f7;color:#11383d;}';
+    s.textContent = '#'+BTN_ID+'{position:fixed;left:20px;bottom:20px;z-index:999999;padding:10px 14px;background:#d7f4f7;color:#11383d;border:1px solid #9bd8e0;border-radius:12px;font-weight:700;cursor:pointer;font-size:14px;}#'+BTN_ID+':hover{background:#c0edf2;}#'+PANEL_ID+'{position:fixed;left:20px;top:50px;z-index:999999;width:380px;min-width:300px;max-width:90vw;background:#fff;border:2px solid #b8e6ec;border-radius:16px;padding:16px;box-shadow:0 14px 40px rgba(0,0,0,.18);font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;color:#163238;max-height:calc(100vh - 70px);display:flex;flex-direction:column;gap:6px;overflow:hidden;resize:both;}#'+PANEL_ID+'.hidden{display:none!important;}.bc8-header{display:flex;align-items:center;justify-content:space-between;cursor:grab;user-select:none;padding-bottom:4px;border-bottom:1px solid #e8f4f7;margin-bottom:2px;}.bc8-header:active{cursor:grabbing;}.bc8-title{font-size:18px;font-weight:800;}.bc8-sub{font-size:11px;color:#5a7379;font-weight:700;}.bc8-btns{display:flex;gap:3px;flex-wrap:wrap;}.bc8-btn{background:#d9f2f6;color:#17363b;border:1px solid #b8e6ec;border-radius:6px;padding:4px 7px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;}.bc8-btn:hover{background:#c0edf2;}.bc8-btn.on{background:#17363b;color:#fff;}.bc8-strip{display:flex;flex-wrap:wrap;gap:6px;padding:8px;background:#f7fcfd;border:1px solid #e0f0f3;border-radius:8px;font-size:11px;flex-shrink:0;}.bc8-strip-item{display:flex;align-items:center;gap:3px;}.bc8-strip-label{color:#6b8a90;font-weight:600;}.bc8-badge{display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;}.bc8-ready{background:#d4edda;color:#155724;}.bc8-countdown{background:#fff3cd;color:#856404;}.bc8-stale{background:#f8d7da;color:#721c24;}.bc8-fresh{background:#d4edda;color:#155724;}.bc8-card{background:#fafeff;border:1px solid #d5eef2;border-radius:8px;padding:8px;flex-shrink:0;}.bc8-focus{background:#f0f9fb;border:1px solid #b8e6ec;border-radius:8px;padding:10px;flex-shrink:0;}.bc8-scroll{background:#fafeff;border:1px solid #d5eef2;border-radius:10px;padding:8px;overflow-y:auto;overflow-x:hidden;flex-shrink:1;flex-grow:1;min-height:60px;}.bc8-scroll::-webkit-scrollbar{width:5px;}.bc8-scroll::-webkit-scrollbar-thumb{background:#b8e6ec;border-radius:3px;}.bc8-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;font-size:11px;line-height:1.4;}.bc8-row-name{display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%;}.bc8-h{font-weight:800;font-size:13px;margin-bottom:6px;color:#11383d;}.bc8-muted{color:#6b8a90;font-size:10px;}.bc8-tier{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;color:#fff;flex-shrink:0;letter-spacing:0.2px;}.bc8-free{background:#22c55e;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:0.3px;}.bc8-free-used{background:#94a3b8;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;}.bc8-compress{background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:8px;flex-shrink:0;font-size:11px;}.bc8-compress-h{font-weight:800;font-size:12px;color:#854d0e;margin-bottom:4px;}.bc8-pin{background:#fdf2f8;border:1px solid #f9a8d4;border-radius:8px;padding:6px;flex-shrink:0;font-size:11px;color:#831843;font-weight:700;}.bc8-val{font-weight:700;text-align:right;white-space:nowrap;font-size:11px;}.bc8-recipe{padding:3px 0;border-bottom:1px solid #eef5f7;}.bc8-recipe:last-child{border-bottom:none;}.bc8-recipe-name{font-weight:700;font-size:11px;}.bc8-log-line{font-size:9px;color:#6b8a90;line-height:1.4;border-bottom:1px solid #f0f7f9;padding:1px 0;}.bc8-state{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#e8f4f7;color:#11383d;}';
     document.head.appendChild(s);
   }
   function refreshTimerDisplay() {
@@ -1380,12 +1517,24 @@
     h += '<button class="bc8-btn '+(S.autoClaim?'on':'')+'" id="bc8-ac">Claim '+(S.autoClaim?'ON':'OFF')+'</button>';
     h += '<button class="bc8-btn '+(S.autoHunt?'on':'')+'" id="bc8-ah">Hunt '+(S.autoHunt?'ON':'OFF')+'</button>';
     h += '<button class="bc8-btn '+(S.strategy!=='broad'?'on':'')+'" id="bc8-strat">'+sl+'</button>';
+    // v12.4.22: Compact mode toggle. Collapses panel to header+buttons+strip+
+    // Next moves + (junk compress card if applicable). Hides Progression /
+    // You-can-make-overflow / Inventory / Session / Log. Useful while
+    // actively crafting and the user just wants the next action visible.
+    h += '<button class="bc8-btn '+(S.compact?'on':'')+'" id="bc8-compact" title="Toggle compact mode (hide Inventory/Session/Log/Progression)">'+(S.compact?'□ Full':'□ Compact')+'</button>';
     h += '<button class="bc8-btn" id="bc8-rss" title="Reset session counters and gain log; leave inventory/settings alone">Reset Session</button>';
     h += '<button class="bc8-btn" id="bc8-rst" style="color:#c0392b;border-color:#e6b0aa;">Reset</button></div>';
     // Status strip
     h += '<div class="bc8-strip">';
     h += '<div class="bc8-strip-item"><span class="bc8-strip-label">Hammer:</span> '+(S.currentHammer?dn(S.currentHammer):'\u2014')+'</div>';
     if (S.currentHammerBonus!=null) h += '<div class="bc8-strip-item"><span class="bc8-strip-label">+'+S.currentHammerBonus+'%</span> / '+S.currentHammerBreakChance+'% break</div>';
+    // v12.4.22: Daily free-smash indicator. Available when no smash has
+    // happened since the last UBC daily-cheese reset. Tracked via chat
+    // broadcast (S.lastSmashAt) + clickCheeseButton (S.lastUbcAt).
+    if (S.currentHammer) {
+      var freeSmash = dailyFreeSmashAvailable();
+      h += '<div class="bc8-strip-item" title="'+(freeSmash?'Your next smash is 0% break (daily reset bonus). Save for the highest-EV craft you can make right now.':'Daily 0%-break smash already used today. Resets at next UBC daily cheese claim.')+'">'+(freeSmash?'<span class="bc8-free">\u26a1 FREE SMASH</span>':'<span class="bc8-free-used">smash: used</span>')+'</div>';
+    }
     if (S.brokenHammers&&S.brokenHammers.length) h += '<div class="bc8-strip-item"><span style="color:#e74c3c;font-weight:700;">Broken:</span> '+S.brokenHammers.map(dn).join(', ')+'</div>';
     h += '<div class="bc8-strip-item"><span class="bc8-strip-label">Claim:</span> <span id="bc8-t-claim">'+fmt(S.timers.beetleCatch)+'</span></div>';
     h += '<div class="bc8-strip-item"><span class="bc8-strip-label">Hunt:</span> <span id="bc8-t-hunt">'+fmt(S.timers.huntCooldown)+'</span></div>';
@@ -1433,6 +1582,31 @@
     if (prog && prog.type==='blocked') { h += '<div class="bc8-muted" style="margin-top:4px;border-top:1px solid #e8f4f7;padding-top:4px;"><b>Goal: '+dn(prog.goal)+'</b> \u2014 '+prog.reason; if (prog.via) h += '<br><span style="color:#5b8dd9;">\u2192 '+prog.via+'</span>'; h += '</div>'; }
     if (!prog && !crafts.length) h += '<div class="bc8-muted">'+(stale?'Scan first.':'No craftable moves. Farm more.')+'</div>';
     h += '</div>';
+    // v12.4.22: Specimen Pin badge \u2014 when owned, surface it prominently so
+    // the user remembers it exists. Specimen Pin's only known use is the
+    // Beetle Trophy creator (Specimen Pin + Beetle + Green sac \u2192 that
+    // Beetle's Trophy). One-shot per pin. Don't burn on a low-tier beetle.
+    var pinCount = inv['specimen_pin'] || 0;
+    if (pinCount > 0) {
+      h += '<div class="bc8-pin">\uD83D\uDC8E '+pinCount+' Specimen Pin'+(pinCount>1?'s':'')+' \u00B7 save for highest-tier Beetle Trophy (Pin + Beetle + Green sac)</div>';
+    }
+    // v12.4.22: Junk Compress advisor card. Show when raw junk is plentiful
+    // (\u2265 30) OR when junk is bottlenecking other crafts. Math: raw \u2192 cubes
+    // \u2192 tesseracts. Live session counter populated by chat broadcast parser.
+    var jc = computeJunkCompress(inv);
+    if (jc.raw >= 30 || jc.currentCubes < 5) {
+      h += '<div class="bc8-compress"><div class="bc8-compress-h">\uD83D\uDDDC Junk Compression</div>';
+      h += '<div>Raw junk: <b>'+jc.raw+'</b> \u2192 <b>'+jc.possibleCubesFromRaw+'</b> Cubes possible (have <b>'+jc.currentCubes+'</b>)</div>';
+      h += '<div>Cubes available: <b>'+jc.totalCubesAfterCompress+'</b> \u2192 <b>'+jc.possibleTess+'</b> Tesseracts possible (have <b>'+jc.currentTess+'</b>)</div>';
+      if (jc.sessionCubesCrafted || jc.sessionTessCrafted) {
+        h += '<div class="bc8-muted" style="margin-top:3px;">Session: '+(jc.sessionCubesCrafted?jc.sessionCubesCrafted+' cubes':'')+(jc.sessionCubesCrafted&&jc.sessionTessCrafted?' \u00B7 ':'')+(jc.sessionTessCrafted?jc.sessionTessCrafted+' tesseracts':'')+' crafted</div>';
+      }
+      h += '</div>';
+    }
+    // v12.4.22: lower sections (Progression / You can make / Inventory /
+    // Session / Log) are skipped in compact mode. Compact = panel shows
+    // only the essentials needed while actively crafting.
+    if (!S.compact) {
     // Progression
     var stage = getStage(inv), col = getCollection(inv);
     h += '<div class="bc8-card"><div style="display:flex;gap:2px;margin-bottom:4px;">';
@@ -1461,6 +1635,7 @@
     h += '</div>';
     // Log
     h += '<div class="bc8-scroll" style="max-height:80px;flex:1;"><div class="bc8-h">Log</div><div id="bc8-log">'+S.log.slice().reverse().map(function(l){return '<div class="bc8-log-line">'+l+'</div>';}).join('')+'</div></div>';
+    } // end if (!S.compact)
     panel.innerHTML = h;
     // Bind
     document.getElementById('bc8-pause').addEventListener('click',function() {
@@ -1473,6 +1648,8 @@
     document.getElementById('bc8-ac').addEventListener('click',function() { S.autoClaim = !S.autoClaim; save(); renderPanel(); });
     document.getElementById('bc8-ah').addEventListener('click',function() { S.autoHunt = !S.autoHunt; save(); renderPanel(); });
     document.getElementById('bc8-strat').addEventListener('click',function() { var m = ['endgame','broad','flowers']; S.strategy = m[(m.indexOf(S.strategy)+1)%m.length]; save(); renderPanel(); });
+    // v12.4.22: compact mode toggle
+    document.getElementById('bc8-compact').addEventListener('click',function() { S.compact = !S.compact; save(); renderPanel(); });
     document.getElementById('bc8-rss').addEventListener('click',function() { S.session = defaultSession(); save(); renderPanel(); logEvent('Session reset.'); });
     document.getElementById('bc8-rst').addEventListener('click',function() { if (confirm('Clear all data?')) { S = defaults(); save(); renderPanel(); fullScan(); } });
     document.getElementById('bc8-minimize').addEventListener('click',function(e) { e.stopPropagation(); var p = document.getElementById(PANEL_ID); if (p) { p.classList.add('hidden'); S.panelOpen = false; save(); } });

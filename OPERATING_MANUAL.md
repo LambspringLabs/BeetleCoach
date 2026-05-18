@@ -1,6 +1,6 @@
 # BeetleCoach Operating Manual
 
-_Last updated: 2026-05-18 (v12.4.21 — added flower rerolls + Junk Tesseract Gamble)._
+_Last updated: 2026-05-18 (v12.4.22 — chat monitor + free-smash indicator + junk compress + compact mode + tier badges + cursor grab + pause hardening)._
 
 Practical reference for a human running the coach day-to-day, and for any future AI session that needs to understand "how the thing actually behaves at runtime" without having to re-derive it from the source.
 
@@ -223,6 +223,75 @@ The recipe is still in `RECIPES` and the Endgame chain. Coach will direct you to
 | **RNG** | Smash recipe. Probabilistic — modified by hammer Crafting Bonus and optionally a sacrifice. Failures return ingredients (recipe valid but RNG missed) OR trigger "Nothing happened" (recipe invalid, also returns ingredients). |
 | **GOAL** | The eventual chain target you're working toward. |
 | **(random sibling)** | The recipe yields ONE OF multiple possible outputs. Adamantine Flower Transmute yields a random Adamantine flower; Pinecone/Moss/Gunpowder Bridge yields one of those three artifacts. Don't expect a specific output. |
+
+## UX features (v12.4.22)
+
+### Compact mode
+
+New button next to the strategy toggle: **`□ Compact`** / **`□ Full`**. Click to collapse the panel to just header + button row + status strip + Next moves + (Specimen Pin badge if any) + (Junk Compress card if junk is plentiful). Hides Progression / You-can-make-overflow / Inventory / Session / Log. Useful while actively crafting and you just want the next-action info visible.
+
+State is persisted (`S.compact`) — survives page reloads.
+
+### Free smash indicator
+
+When a hammer is equipped, the status strip shows either `⚡ FREE SMASH` (green) or `smash: used` (gray):
+
+- **FREE** = no smash has fired since the last UBC daily-cheese claim. Your next smash is at 0% break — save it for the highest-EV craft you can make right now.
+- **used** = a smash has been detected via Global Chat broadcast since the last UBC. Future smashes today are at the hammer's normal break rate (Adamantine = 2%/5%, Diamond = 1%/9%, etc.).
+
+Detection: tracked via `S.lastUbcAt` (set on auto-claim of daily cheese) + `S.lastSmashAt` (set when the chat monitor sees your own `YOU SACRIFICED ... AND SMASHED ...` or `YOU ASSEMBLED ...` broadcast).
+
+Hover the badge for a longer tooltip.
+
+### Junk Compression card
+
+Appears when raw junk ≥ 30 OR current Junk Cube count is low (<5). Shows:
+
+```
+🗜 Junk Compression
+Raw junk: 412 → 206 Cubes possible (have 151)
+Cubes available: 357 → 119 Tesseracts possible (have 21)
+Session: 18 cubes · 6 tesseracts crafted
+```
+
+Live session counters increment when the chat monitor sees `YOU ASSEMBLED A Junk Cube...` / `YOU ASSEMBLED A Junk Tesseract...` from your own broadcasts. So as you grind compression, the counter updates in real time without scrolling chat.
+
+### Specimen Pin badge
+
+When `inv.specimen_pin >= 1`, a pink badge appears above the recipe list:
+
+```
+💎 1 Specimen Pin · save for highest-tier Beetle Trophy (Pin + Beetle + Green sac)
+```
+
+Reminder that this is a rare jackpot from the JT × 2 gamble and shouldn't be wasted on a low-tier beetle. The Beetle Trophy mechanic (`Specimen Pin + Beetle + Green sacrifice → that Beetle's Trophy`) is documented in V_THREAD_FINDINGS.md.
+
+### Chat broadcast monitor
+
+Each tick (10s), BC reads your Global Chat element looking for your own craft broadcasts. Three patterns matched:
+
+1. Long-form Assemble: `YOU ASSEMBLED A <output> FROM <ingredients>!`
+2. Long-form Smash: `YOU SACRIFICED A <sacrifice> AND SMASHED <ingredients> INTO A <output>!`
+3. Trophy short-form: `🏆 Crafted [[<item_key>]]!`
+
+When a match is detected from username `sails` (configurable via `S.myUsername`):
+- `S.lastSmashAt = Date.now()` (powers free-smash indicator)
+- `S.craftCounters[output] += 1` (powers junk-compress session counter)
+- If output is a collectible beetle: `S.session.gains.push(displayName)` (so the session card updates without waiting for full scan)
+- A `Chat: <type> → <output>` line is added to the Log section
+
+Observation-only — runs whether paused or not.
+
+### Pause hardening
+
+Fixed a small wart documented in LESSONS_LEARNED.md §8: `scheduleHuntRetry`'s setTimeout could fire ~3.5s after the user clicked Pause if scheduled mid-`HUNTING` state. Now respects `S.paused` and bails the retry. Pause is now truly complete — no automation fires after the click.
+
+### Visual polish
+
+- **Tier badges** font-size 8px → 10px, padding 1×4 → 2×6px. More legible at panel zoom.
+- **Cursor: grab** on the panel header (was `cursor: move`) with `cursor: grabbing` on active drag. Clearer affordance.
+
+---
 
 ## New recipes (v12.4.21)
 
