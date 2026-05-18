@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.22
+// @version      12.4.23
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.22';
+  var VER = '12.4.23';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -470,9 +470,18 @@
       // v12.4.22: chat monitor + compact mode + free-smash tracking
       compact:false,         // collapse panel to essentials when true
       lastUbcAt:0,           // last UBC daily-cheese claim timestamp (resets hammer break-chance)
-      lastSmashAt:0,         // last detected smash from chat broadcast (used to gate the daily 0%-break indicator)
+      lastSmashAt:0,         // last detected smash from chat broadcast (global flag, kept for backwards compat)
       craftCounters:{},      // {recipeOutputKey: countThisSession} — incremented by chat broadcast parser
       myUsername:'sails',    // user's chat display name (matched against broadcast author)
+      // v12.4.23: per-hammer free-smash tracking. Each owned hammer gets one
+      // 0%-break smash per day after UBC daily reset (per wiki/protips). We
+      // track per-hammer instead of a single global flag so users with
+      // multiple hammers see independent indicators. Heuristic: smash
+      // detected from chat → attribute to S.currentHammer (the highest-tier
+      // non-broken hammer). Wrong if user manually selects a lower-tier
+      // hammer in the bench (Grigger Maxxing), but the chat broadcast
+      // doesn't say which hammer was used.
+      hammerSmashedSince:{}, // {hammer_t1: timestamp, hammer_t2: timestamp, ...}
       session:defaultSession() };
   }
   function normalizeSession(rawSession) {
@@ -505,6 +514,15 @@
       var p = Object.assign(defaults(), parsed);
       p.session = normalizeSession((parsed || {}).session);
       if ((p.ver||'0').split('.')[0] !== VER.split('.')[0]) { p.mergedInventory = {}; p.log = []; p.session = defaultSession(); }
+      // v12.4.23: backward-compat migration. v12.4.22 used a single
+      // S.lastSmashAt flag; v12.4.23 adds per-hammer S.hammerSmashedSince.
+      // If old state has a smash recorded post-UBC but no per-hammer
+      // entries yet, conservatively mark the current hammer as smashed
+      // so the indicator doesn't incorrectly show all-free on first load.
+      if (!p.hammerSmashedSince) p.hammerSmashedSince = {};
+      if (p.lastSmashAt && p.lastSmashAt > (p.lastUbcAt||0) && Object.keys(p.hammerSmashedSince).length === 0 && p.currentHammer) {
+        p.hammerSmashedSince[p.currentHammer] = p.lastSmashAt;
+      }
       p.ver = VER; p.machineState = 'BOOTING'; p.stateEnteredAt = Date.now();
       return p;
     } catch(e) { return defaults(); }
@@ -646,6 +664,26 @@
     if (cd) { var v3 = cd.textContent.trim().replace(/\s*to\s+next\s+claim\s*/i,'').trim(); if (/\d/.test(v3)) t.beetleCatch = v3; }
     var hc = document.querySelector('.beetle-catch-module__hunt-button-cheese-cost');
     if (hc) { var txt = hc.textContent.trim(); if (/cooldown/i.test(txt)) { var cl = txt.replace(/\s*cooldown\s*/i,'').trim(); if (/\d/.test(cl)) t.huntCooldown = cl; } else if (/cheese/i.test(txt)) t.huntCooldown = 'Ready!'; }
+    // v12.4.23: detect manual UBC claim. If the cheese-claim timer was "Ready"
+    // last tick and is now a countdown like "23h 59m", the daily-cheese
+    // claim just fired — either via BC's clickCheeseButton (which already
+    // sets lastUbcAt directly) or by the user manually clicking in-game.
+    // In either case, mark the UBC event so the free-smash indicator
+    // resets. Guards (from code review):
+    //   - boot grace: ignore for first 60s after script boot (React mount
+    //     can briefly show "Ready" before transitioning to the real timer)
+    //   - recently auto-claimed: bail if clickCheeseButton fired in the
+    //     last 30s — that path already set lastUbcAt directly
+    var prevDC = (S.timers && S.timers.dailyCheese) || '';
+    var wasReady = /ready/i.test(prevDC);
+    var nowCountdown = t.dailyCheese && !/ready/i.test(t.dailyCheese) && /\d/.test(t.dailyCheese);
+    var recentlyAutoClaimed = (Date.now() - (S.lastUbcAt || 0)) < 30000;
+    var pastBootGrace = (Date.now() - (_bootTime || 0)) > 60000;
+    if (wasReady && nowCountdown && !recentlyAutoClaimed && pastBootGrace) {
+      S.lastUbcAt = Date.now();
+      S.hammerSmashedSince = {};
+      logEvent('Manual UBC claim detected — hammer break chance reset.');
+    }
     S.timers = t;
   }
   function parseHammer() {
@@ -703,8 +741,28 @@
      The chat element on remilia.net is rendered server-side; we
      don't have a stable class to query. We use a tolerant selector
      and silently skip if not found. Runs each tick — see tick().
-     Observation-only; safe to run while paused. */
-  var _lastChatSig = '';
+     Observation-only; safe to run while paused.
+
+     v12.4.23: _seenSigs Set replaces v12.4.22's single _lastChatSig.
+     The earlier design double-counted when the MutationObserver and
+     pollChat raced: observer would process line N-1 and N (set sig to
+     sig of N), then pollChat would iterate the last 10 lines, see N-2
+     wasn't sig-matched to N, and re-process N-2. Set-based dedup
+     tracks all recently-processed sigs and skips them in both paths.
+     Pruned at 100 entries (chat moves slowly enough that 100 is
+     several minutes of history). */
+  var _seenSigs = new Set();
+  function chatSigSeen(sig) {
+    if (!sig) return false;
+    if (_seenSigs.has(sig)) return true;
+    _seenSigs.add(sig);
+    if (_seenSigs.size > 100) {
+      var arr = Array.from(_seenSigs);
+      _seenSigs = new Set(arr.slice(arr.length - 50));
+    }
+    return false;
+  }
+  var _lastChatSig = ''; // legacy, kept as a fast-path hint; primary dedup is _seenSigs
   function parseChatBroadcast(text) {
     if (!text) return null;
     // Long-form ASSEMBLE: "YOU ASSEMBLED A <out> FROM <ingredients>!"
@@ -733,6 +791,71 @@
     }
     return null;
   }
+  function processChatLine(text) {
+    // v12.4.23: shared parser used by both pollChat and the MutationObserver.
+    // Idempotency via _lastChatSig (caller's responsibility to update sig
+    // BEFORE calling this to prevent observer/poll double-count race).
+    if (!text || text.length < 5) return false;
+    var myName = (S.myUsername || 'sails').toLowerCase();
+    if (text.toLowerCase().indexOf(myName) < 0) return false;
+    var bc = parseChatBroadcast(text);
+    if (!bc) return false;
+    // Only SMASH recipes consume hammer durability + the daily 0%-break
+    // bonus. Assemble recipes (Junk Cube, Pollen, Reroll, Tesseract
+    // Gamble) don't use a hammer at all per wiki — they should NOT mark
+    // a smash event. v12.4.23 narrows the smash-tracking to type==='smash'
+    // (v12.4.22 incorrectly bucketed both, per code review).
+    if (bc.type === 'smash') {
+      S.lastSmashAt = Date.now();
+      if (S.currentHammer) {
+        S.hammerSmashedSince = S.hammerSmashedSince || {};
+        S.hammerSmashedSince[S.currentHammer] = Date.now();
+      }
+    }
+    S.craftCounters = S.craftCounters || {};
+    S.craftCounters[bc.output] = (S.craftCounters[bc.output] || 0) + 1;
+    if (ALL_BEETLES.indexOf(bc.output) > -1 && bc.output !== 'green') {
+      S.session.gains.push(dn(bc.output));
+    }
+    logEvent('Chat: ' + bc.type + ' → ' + dn(bc.output));
+    return true;
+  }
+  function setupChatObserver() {
+    // v12.4.23: lower-latency chat monitor via MutationObserver. Once
+    // attached, fires immediately on new chat lines instead of waiting
+    // for the next 10s tick. Falls back to pollChat (which still runs
+    // each tick) if the observer can't attach. Both share _lastChatSig
+    // for dedup. Idempotent — only attaches once.
+    if (window.__bcChatObs) return;
+    var attempts = 0;
+    var attach = function() {
+      attempts++;
+      if (attempts > 20) return; // ~5 min of retries, then give up
+      var chat = findChatContainer();
+      if (!chat) { setTimeout(attach, 15000); return; }
+      try {
+        window.__bcChatObs = new MutationObserver(function(muts) {
+          muts.forEach(function(m) {
+            for (var i = 0; i < m.addedNodes.length; i++) {
+              var n = m.addedNodes[i];
+              if (!n || n.nodeType !== 1) continue;
+              var text = (n.textContent || '').trim().slice(0, 300);
+              if (!text) continue;
+              var sig = text.slice(0, 200);
+              if (chatSigSeen(sig)) continue;
+              if (processChatLine(text)) {
+                save();
+                renderPanel();
+              }
+            }
+          });
+        });
+        window.__bcChatObs.observe(chat, {childList:true, subtree:false});
+        logEvent('Chat monitor attached (live).');
+      } catch (e) { /* fall back to polling */ }
+    };
+    attach();
+  }
   function pollChat() {
     // Read latest chat line, parse if it's a craft broadcast from the user.
     // No-op safe: returns silently if chat element not present.
@@ -741,51 +864,49 @@
       if (!chat) return;
       var lines = chat.children;
       if (!lines || !lines.length) return;
-      // Inspect the last ~10 lines for any new broadcasts since the last poll
+      // v12.4.23: shared chatSigSeen() Set-based dedup eliminates the
+      // observer/poll double-count race. Both paths skip lines whose
+      // sig is already in _seenSigs (added on first sighting).
       var startIdx = Math.max(0, lines.length - 10);
       var sigUpdated = false;
       for (var i = startIdx; i < lines.length; i++) {
         var ln = lines[i];
         var text = (ln.textContent || '').trim();
-        if (!text || text.length < 5) continue;
         var sig = text.slice(0, 200);
-        // sig comparison: each line in chat is unique enough; if sig matches
-        // the last-seen, we've caught up. Continue past matches in case
-        // there are multiple lines with same prefix.
-        if (sig === _lastChatSig) continue;
-        // Only process if this is the user's own broadcast — match username.
-        var myName = (S.myUsername || 'sails').toLowerCase();
-        if (text.toLowerCase().indexOf(myName) < 0) continue;
-        var bc = parseChatBroadcast(text);
-        if (!bc) continue;
-        // Record
-        if (bc.type === 'smash' || bc.type === 'assemble') S.lastSmashAt = Date.now();
-        S.craftCounters = S.craftCounters || {};
-        S.craftCounters[bc.output] = (S.craftCounters[bc.output] || 0) + 1;
-        // If output is a collectible beetle, add to session.gains
-        if (ALL_BEETLES.indexOf(bc.output) > -1 && bc.output !== 'green') {
-          S.session.gains.push(dn(bc.output));
-        }
-        // Log it (terse — recipe broadcast already gives full context)
-        logEvent('Chat: ' + bc.type + ' → ' + dn(bc.output));
-        sigUpdated = true;
+        if (chatSigSeen(sig)) continue;
+        if (processChatLine(text)) sigUpdated = true;
       }
-      if (sigUpdated || _lastChatSig === '') {
-        // Update _lastChatSig to the most recent line so next poll starts from there
-        var lastLn = lines[lines.length - 1];
-        _lastChatSig = (lastLn.textContent || '').trim().slice(0, 200);
-        save();
-      }
+      if (sigUpdated) save();
     } catch (e) { /* defensive: chat structure may change; skip silently */ }
   }
   function dailyFreeSmashAvailable() {
-    // Free 0%-break smash is available when no smash has happened since the
-    // last UBC daily reset. If we've never tracked either, default to "unknown"
-    // and show as available (optimistic but harmless).
+    // v12.4.22 global helper kept for backwards compat — true if ANY hammer
+    // has a free smash available. New per-hammer helpers below are preferred.
     var ubc = S.lastUbcAt || 0;
     var smash = S.lastSmashAt || 0;
-    if (!ubc && !smash) return true; // boot state, no info
+    if (!ubc && !smash) return true;
     return smash < ubc;
+  }
+  function hammerIsFresh(hammerKey) {
+    // v12.4.23: per-hammer free-smash check. True if this hammer hasn't been
+    // smashed since the last UBC daily reset. Boot state (no UBC tracked
+    // yet) treated optimistically as fresh.
+    if (!hammerKey) return false;
+    var ubc = S.lastUbcAt || 0;
+    var smashed = (S.hammerSmashedSince && S.hammerSmashedSince[hammerKey]) || 0;
+    if (!ubc && !smashed) return true;
+    return smashed < ubc;
+  }
+  function freeSmashSummary() {
+    // v12.4.23: returns {freeCount, totalOwned, perHammer:[{key, label, fresh, abbr}]}
+    // for use in renderPanel's status strip and tooltip.
+    var owned = S.ownedHammers || [];
+    var abbrMap = {hammer_t1:'T', hammer_t2:'B', hammer_t3:'M', hammer_t4:'A', hammer_t5:'D'};
+    var perHammer = owned.map(function(k) {
+      return {key:k, label:dn(k), fresh:hammerIsFresh(k), abbr:(abbrMap[k]||'?')};
+    });
+    var freeCount = perHammer.filter(function(h){return h.fresh;}).length;
+    return {freeCount:freeCount, totalOwned:owned.length, perHammer:perHammer};
   }
   function computeJunkCompress(inv) {
     // Returns: {raw, possibleCubesFromRaw, currentCubes, totalCubesAfterCompress, possibleTess, currentTess, sessionCubesCrafted, sessionTessCrafted}
@@ -1026,7 +1147,9 @@
     // v12.4.22: track UBC timestamp — daily cheese claim is the daily reset
     // event that returns every hammer's Current Break Chance to 0% (per the
     // wiki + protips). The Free-Smash indicator uses this.
+    // v12.4.23: also clear per-hammer smash flags so all hammers show free.
     S.lastUbcAt = Date.now();
+    S.hammerSmashedSince = {};
     S.session.cheeseClaims++; S.lastActionAt = Date.now(); logEvent('Auto-claimed daily cheese!'); save();
     return 'fired';
   }
@@ -1244,6 +1367,9 @@
     // safe under pause). Updates S.lastSmashAt + S.craftCounters from
     // visible game broadcasts so the free-smash indicator + junk compress
     // session counter stay live without waiting for the next full scan.
+    // v12.4.23: also attempt MutationObserver attach (idempotent) for
+    // lower-latency event-driven monitoring. Polling still runs as fallback.
+    setupChatObserver();
     pollChat();
     // Master pause: skip ALL automation but keep the panel + timers
     // refreshing. Lets the user navigate freely (craft, browse) while
@@ -1528,12 +1654,27 @@
     h += '<div class="bc8-strip">';
     h += '<div class="bc8-strip-item"><span class="bc8-strip-label">Hammer:</span> '+(S.currentHammer?dn(S.currentHammer):'\u2014')+'</div>';
     if (S.currentHammerBonus!=null) h += '<div class="bc8-strip-item"><span class="bc8-strip-label">+'+S.currentHammerBonus+'%</span> / '+S.currentHammerBreakChance+'% break</div>';
-    // v12.4.22: Daily free-smash indicator. Available when no smash has
-    // happened since the last UBC daily-cheese reset. Tracked via chat
-    // broadcast (S.lastSmashAt) + clickCheeseButton (S.lastUbcAt).
-    if (S.currentHammer) {
-      var freeSmash = dailyFreeSmashAvailable();
-      h += '<div class="bc8-strip-item" title="'+(freeSmash?'Your next smash is 0% break (daily reset bonus). Save for the highest-EV craft you can make right now.':'Daily 0%-break smash already used today. Resets at next UBC daily cheese claim.')+'">'+(freeSmash?'<span class="bc8-free">\u26a1 FREE SMASH</span>':'<span class="bc8-free-used">smash: used</span>')+'</div>';
+    // v12.4.23: Per-hammer Daily free-smash indicator. Each owned hammer
+    // gets its own 0%-break daily smash per wiki. Display: count "\u26a1 N/M free"
+    // + tooltip listing each hammer's status. Color shifts: green when
+    // any free, gray when 0/M. Heuristic for "smashed" detection: chat
+    // broadcast attributed to S.currentHammer at the moment of smash (may
+    // be wrong if user manually selects a lower hammer in the bench).
+    if (S.ownedHammers && S.ownedHammers.length > 0) {
+      var fs = freeSmashSummary();
+      var tip = fs.perHammer.map(function(hh){return hh.label+': '+(hh.fresh?'\u26a1 free':'used');}).join('\n');
+      tip += '\n\nFree smashes reset at the next UBC daily cheese claim.\nNote: each detected smash is attributed to your highest-tier non-broken hammer (S.currentHammer).\nIf you manually select a lower hammer in the bench, the indicator may be wrong.';
+      // v12.4.23: three-tier badge color \u2014 green=all free, yellow=partial, gray=all used.
+      var badgeCls, letters = fs.perHammer.map(function(hh){return hh.abbr + (hh.fresh ? '\u26a1' : '\u00b7');}).join(' ');
+      if (fs.freeCount === fs.totalOwned) {
+        badgeCls = 'bc8-free';        // all free \u2192 green
+      } else if (fs.freeCount > 0) {
+        badgeCls = 'bc8-countdown';   // partial \u2192 yellow
+      } else {
+        badgeCls = 'bc8-free-used';   // all used \u2192 gray
+      }
+      var label = fs.freeCount === 0 ? 'all used' : ('\u26a1 '+fs.freeCount+'/'+fs.totalOwned+' free');
+      h += '<div class="bc8-strip-item" title="'+tip.replace(/"/g,'&quot;')+'"><span class="'+badgeCls+'" style="padding:2px 6px;border-radius:4px;font-size:10px;font-weight:800;">'+label+'</span>' + (fs.totalOwned > 1 ? ' <span style="font-size:9px;color:#475569;font-weight:600;">'+letters+'</span>' : '') + '</div>';
     }
     if (S.brokenHammers&&S.brokenHammers.length) h += '<div class="bc8-strip-item"><span style="color:#e74c3c;font-weight:700;">Broken:</span> '+S.brokenHammers.map(dn).join(', ')+'</div>';
     h += '<div class="bc8-strip-item"><span class="bc8-strip-label">Claim:</span> <span id="bc8-t-claim">'+fmt(S.timers.beetleCatch)+'</span></div>';

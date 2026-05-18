@@ -1,6 +1,6 @@
 # BeetleCoach Operating Manual
 
-_Last updated: 2026-05-18 (v12.4.22 — chat monitor + free-smash indicator + junk compress + compact mode + tier badges + cursor grab + pause hardening)._
+_Last updated: 2026-05-18 (v12.4.23 — per-hammer free-smash tracking + manual UBC detection + MutationObserver chat monitor + Set-based dedup)._
 
 Practical reference for a human running the coach day-to-day, and for any future AI session that needs to understand "how the thing actually behaves at runtime" without having to re-derive it from the source.
 
@@ -232,16 +232,37 @@ New button next to the strategy toggle: **`□ Compact`** / **`□ Full`**. Clic
 
 State is persisted (`S.compact`) — survives page reloads.
 
-### Free smash indicator
+### Free smash indicator (v12.4.23 — per-hammer)
 
-When a hammer is equipped, the status strip shows either `⚡ FREE SMASH` (green) or `smash: used` (gray):
+Status strip shows `⚡ N/M free` with per-hammer letter abbreviations (T B M A D for Tin/Bronze/Mithril/Adamantine/Diamond, with ⚡ for fresh and · for used). Three-tier badge color:
 
-- **FREE** = no smash has fired since the last UBC daily-cheese claim. Your next smash is at 0% break — save it for the highest-EV craft you can make right now.
-- **used** = a smash has been detected via Global Chat broadcast since the last UBC. Future smashes today are at the hammer's normal break rate (Adamantine = 2%/5%, Diamond = 1%/9%, etc.).
+- **Green `⚡ N/N free`** — all owned hammers have their daily 0%-break smash available
+- **Yellow `⚡ N/M free`** — some used, some fresh
+- **Gray `all used`** — no free smashes left today
 
-Detection: tracked via `S.lastUbcAt` (set on auto-claim of daily cheese) + `S.lastSmashAt` (set when the chat monitor sees your own `YOU SACRIFICED ... AND SMASHED ...` or `YOU ASSEMBLED ...` broadcast).
+Hover the badge for a per-hammer breakdown tooltip:
 
-Hover the badge for a longer tooltip.
+```
+Tin: ⚡ free
+Bronze: used
+Mithril: ⚡ free
+Adamantine: ⚡ free
+Diamond: ⚡ free
+
+Free smashes reset at the next UBC daily cheese claim.
+Note: each detected smash is attributed to your highest-tier non-broken hammer.
+If you manually select a lower hammer in the bench, the indicator may be wrong.
+```
+
+Detection:
+- **`S.lastUbcAt`** — set by `clickCheeseButton` (BC auto-claim) AND by `parseTimers` when it detects a manual UBC claim (the cheese-claim timer transitioning from `Ready` to a countdown like `23h 59m`). Manual UBC detection has a 60s boot-grace and 30s auto-claim cooldown to avoid React-mount false positives.
+- **`S.hammerSmashedSince[hammer_key]`** — set when the chat monitor sees your own `YOU SACRIFICED ... AND SMASHED ... INTO ...` broadcast. Only fires on `type === 'smash'` broadcasts (Assemble crafts like pollens, Junk Cubes, Flower Rerolls, Tesseract Gamble don't burn the daily 0%-break bonus). Heuristic: attributes the smash to `S.currentHammer` (the highest-tier non-broken hammer). Wrong if you manually selected a different hammer in the bench (Grigger Maxxing) — the chat broadcast doesn't say which hammer was used.
+
+Both paths reset `S.hammerSmashedSince = {}` when the UBC event fires, so all hammers go back to "fresh."
+
+Limitations and mitigations:
+- **Per-hammer attribution is heuristic** — based on `S.currentHammer` at the moment of smash. The tooltip notes this. If you regularly Grigger Maxx with Tin while owning Adamantine, the indicator will show "Adamantine used" when you actually used Tin.
+- **Manual UBC detection isn't bulletproof** — the boot-grace + auto-claim guards catch the most common false positives. If the indicator misbehaves, hit "Full Scan" or wait for the next BC auto-claim.
 
 ### Junk Compression card
 
