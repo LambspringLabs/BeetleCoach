@@ -273,25 +273,31 @@ The `postFirstBreak` field is in `HAMMER_STATS` as of v12.4.18 but not yet surfa
 
 | File | What it is |
 |---|---|
-| `beetle_coach.user.js` | The userscript itself. Tampermonkey loads from this. |
-| `HANDOFF_v12.md` | Architectural handoff (v12 refactor). Mostly accurate; check the v12.4.x epilogue. |
-| `OPERATING_MANUAL.md` | This file. Runtime behavior + user workflows. |
-| `WIKI_AUDIT.md` | Full structured scrape of beetle.wiki as of 2026-05-17. Game-mechanics ground truth. |
-| `REVIEW_FINDINGS.md` | Consolidated 2026-05-17 audit + fix plan. Historical. |
-| `RECIPE_AUDIT.md` | Independent verifier pass over all 40 recipes against the wiki. |
-| `beetleboy_knowledge_base.md` | Older game knowledge base. Cross-check against `WIKI_AUDIT.md` for current facts. |
-| `beetle_known_recipes_human_readable.md` | Older recipe reference. Updated 2026-05-17 with delta block at top. |
-| `beetleboy_value_model.md` | Item-value math, EV reasoning for hammer choice. |
-| `inventory_snapshots/` | Empty folder; reserved for future inventory export feature. |
+| `beetle_coach.user.js` | The userscript itself. Tampermonkey loads this from `LambspringLabs/BeetleCoach/master`. |
+| **`START_HERE.md`** | **Top-level entry point. Read first if you're a future AI session arriving cold.** Current state, doc map, project summary. |
+| **`LESSONS_LEARNED.md`** | **Read second.** Non-obvious gotchas: drag-drop unautomatable, prompt-injection patterns observed, /v/ thread is gold source, recipe-value tuning principles. |
+| `HANDOFF_v12.md` | Architectural handoff (v12 refactor) + v12.4.x epilogues. Architecture + data model + what NOT to automate. |
+| `OPERATING_MANUAL.md` | This file. Runtime behavior + user workflows + panel layout + FAQ. |
+| `WIKI_AUDIT.md` | Full structured scrape of beetle.wiki as of 2026-05-17. Game-mechanics ground truth from the wiki perspective. |
+| `V_THREAD_FINDINGS.md` | /v/324142 thread mining (2026-05-18). Empirical recipe verification from game broadcasts. **More authoritative than the wiki for new recipes.** |
+| `REVIEW_FINDINGS.md` | Consolidated 2026-05-17 audit + fix plan. Historical context for v12.4.18 → v12.4.20. |
+| `RECIPE_AUDIT.md` | Independent verifier pass over `RECIPES[]` entries against the wiki. |
+| `DOUBLE_TESSERACT_HUNT.md` | Historical multi-agent hunt log. Some agent-sourced claims unverified — treat with caution per LESSONS_LEARNED.md §4. |
+| `beetleboy_knowledge_base.md` | Older game knowledge base (April 2026 baseline). Has v12.4.18 delta block at top. Cross-check facts against `WIKI_AUDIT.md` + `V_THREAD_FINDINGS.md`. |
+| `beetle_known_recipes_human_readable.md` | Older recipe reference. Same status as above. |
+| `beetleboy_value_model.md` | Strategic value math, EV reasoning, lanes, optimal craft order. Rewritten for v12.4.20 endgame state. |
+| `inventory_snapshots/` | Empty folder; reserved for a future inventory export feature. |
 
 ---
 
-## Open questions / known gaps (2026-05-17)
+## Open questions / known gaps (2026-05-18)
 
-- **Hercules recipe** is in the script's RECIPES but has no wiki page. Likely chat folklore. Investigate in-game before relying on it.
-- **Trinkets + Trophies** are entirely unmodeled. 9 trinkets + 15 trophies documented on the wiki with recipes. Future work.
-- **Specimen Pin** (6th Adamantine artifact) has no documented recipe on the wiki. Will appear in inventory if owned.
-- **Bumblebee recipe** unknown on the wiki. Mithril rarity. Special — cannot be transmuted.
-- **Holiday beetles** (Black Widow, Candycane Tiger Moth) — wiki pages empty. Not in ALL_BEETLES until confirmed.
-- **Hammer post-first-use break** in HAMMER_STATS but not in the strip display.
-- **Daily-reset detection** — script doesn't know when the Universal Basic Cheese reset fires, so it can't surface the "use your premium hammer NOW for a free smash" callout.
+- **Hercules recipe** is in the script's RECIPES but has no wiki page or /v/ broadcast. Likely chat folklore. User says "ill investigate." Don't recommend until confirmed.
+- **Trinkets + Trophies** are still unmodeled in `RECIPES[]` for auto-recommendation, but the wiki documents 9 trinkets + 15 trophies with full recipes (see `WIKI_AUDIT.md` F.4–F.5). Adding them to the script is a bigger ask — design-pending.
+- **Specimen Pin → Beetle Trophy recipe** (`Specimen Pin + Beetle + Green sac → that Beetle's Trophy`) confirmed via /v/ broadcast 2026-05-18, but not yet in `RECIPES[]` because it needs a new `any_collected_beetle` token group that doesn't fit cleanly into `TOKEN_GROUPS`.
+- **`junk_sphere`** item exists (sneed broadcasts `🏆 Crafted [[junk_sphere]]!` in chat 2026-05-17), but the recipe is not in any data file we've found. Likely a very new addition c.sneed deployed.
+- **Bumblebee recipe** is now KNOWN: it's one of the outputs of `Junk Tesseract Gamble` (2× JT). No targeted craft path. Documented in v12.4.21.
+- **Holiday beetles** (Black Widow Halloween, Candycane Tiger Moth Christmas) — wiki pages empty. Not in `ALL_BEETLES` until confirmed.
+- **Hammer post-first-use break** in `HAMMER_STATS` (data field `postFirstBreak`) but not yet surfaced in the strip display. The daily 0%-break reset isn't surfaced either.
+- **Daily-reset detection** — script doesn't know when Universal Basic Cheese resets fire. Can't surface "use your premium hammer NOW for a free smash" callout.
+- **The 5 unknown Trophies** (Milady Fumoku, Reminet ID, Deck of Cards, D20, Engraved Lighter) — c.sneed's data file has `trophy_milady_fumoku` and `trophy_remilianet_id` as known outputs; inputs not yet documented anywhere.

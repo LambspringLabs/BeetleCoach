@@ -1,8 +1,31 @@
 # BeetleCoach v12 Refactor Handoff
 
-_Originally written 2026-04-12 for the v11 → v12 refactor. Epilogue added 2026-05-17 (v12.4.20)._
+_Originally written 2026-04-12 for the v11 → v12 refactor. Epilogues added 2026-05-17 (v12.4.20) and 2026-05-18 (v12.4.21)._
 
-> **⚡ 2026-05-17 (v12.4.20) update — read this banner first.**
+> **⚡ 2026-05-18 (v12.4.21) update — added 5 recipes per /v/324142 mining.**
+>
+> The miladychan `/v/324142` thread ("BeetleBoy crafting recipes and tips!", 416 posts) is the public mirror of every player's auto-broadcast `YOU ASSEMBLED ... FROM ...` / `YOU SACRIFICED ... AND SMASHED ... INTO ...` game messages. Mining it on 2026-05-18 surfaced confirmed recipes the wiki doesn't document. v12.4.21 adds 5 to `RECIPES[]`:
+>
+> - `Tin / Bronze / Mithril / Adamantine Flower Reroll` — `junk_cube_t2 + any_<tier>_flower` (Assemble, RNG output, can return same flower as input)
+> - `Junk Tesseract Gamble` — `2x junk_cube_t2` (Assemble lottery; outputs include Bumblebee, random Mithril flower, Specimen Pin (~1.3% rare jackpot), random beetle/flower, partial refund)
+>
+> All 5 are in `MULTI_OUTPUT_RECIPES` so the panel annotates them `(random sibling)`. `PREREQ_RECIPES` now lists `Adamantine Flower Reroll` as the preferred path to `passionflower` / `gazania` / `pincushion`, and `Mithril Flower Reroll` as the path to `fringed_iris` / `larkspur`. `RECIPE_VALUE` tuned so reroll surfaces above transmute when both available; Gamble (30) surfaces as backup when progression is blocked.
+>
+> **New companion docs (2026-05-18):**
+>
+> - [`START_HERE.md`](./START_HERE.md) — top-level entry point for future AI sessions. Read this first.
+> - [`LESSONS_LEARNED.md`](./LESSONS_LEARNED.md) — non-obvious gotchas: drag-drop unautomatable, prompt-injection patterns observed, /v/ thread is gold source, bench mode auto-resolves, recipe-value tuning principles.
+> - [`V_THREAD_FINDINGS.md`](./V_THREAD_FINDINGS.md) — full /v/324142 mining report with verbatim broadcast quotes. Source for v12.4.21's new recipes.
+>
+> **What didn't land in v12.4.21 (open work):**
+>
+> - **Specimen Pin Beetle Trophy recipe** (`Specimen Pin + Beetle + Green sac → that Beetle's Trophy`). Confirmed via /v/ broadcast but needs a new `any_collected_beetle` TOKEN_GROUP. Punted.
+> - **`junk_sphere`** item — sneed crafted one in chat 2026-05-17, but no recipe documented anywhere. Likely a newer recipe c.sneed deployed.
+> - **Hercules recipe** verification — still unverified. User investigating.
+
+---
+
+> **⚡ 2026-05-17 (v12.4.20) update.**
 >
 > The architecture below is still accurate. The state machine, scan loop, login flow, eject recovery, and tick cadence (10 s) are unchanged. **However**, the data tables (`LABELS`, `ALL_BEETLES`, `ALL_FLOWERS`, `ITEM_ALIASES`, `ANY_JUNK`, `RECIPES`, `HAMMER_STATS`) were fully resynced with `beetle.wiki` because the game shipped a Christmas Crafting Update we missed. Several recipe rows are also gone (`Monarch (alt)`, `Goliath Beetle (alt)`, `Bombardier Beetle (alt)` — wiki-unverified substitutions). `MULTI_OUTPUT_RECIPES` was added so the panel can annotate RNG-output recipes with `(random sibling)`. `isProtected()` was extended to cover `fringed_iris`, `larkspur`, and `passionflower`.
 >
@@ -10,14 +33,18 @@ _Originally written 2026-04-12 for the v11 → v12 refactor. Epilogue added 2026
 >
 > | File | Read for |
 > |---|---|
-> | [`OPERATING_MANUAL.md`](./OPERATING_MANUAL.md) | How the script behaves at runtime; how a user actually uses the panel; pause workflow; troubleshooting |
+> | [`START_HERE.md`](./START_HERE.md) | **Read this first.** Top-level entry point — current state, doc map, project summary, what to know. |
+> | [`LESSONS_LEARNED.md`](./LESSONS_LEARNED.md) | **Read this second.** Non-obvious gotchas: drag-drop unautomatable, prompt-injection patterns, recipe-value tuning, etc. |
+> | [`OPERATING_MANUAL.md`](./OPERATING_MANUAL.md) | How the script behaves at runtime; user-facing panel + pause workflow + troubleshooting |
 > | This file (`HANDOFF_v12.md`) | Architecture, data model, design decisions, what NOT to automate |
 > | [`WIKI_AUDIT.md`](./WIKI_AUDIT.md) | Game-mechanics ground truth (recipes, anti-recipes, hammers, trinkets, trophies) as of 2026-05-17 |
-> | [`RECIPE_AUDIT.md`](./RECIPE_AUDIT.md) | Independent verification pass over the 40 active recipes in `RECIPES[]` against the wiki |
+> | [`V_THREAD_FINDINGS.md`](./V_THREAD_FINDINGS.md) | Empirical recipe verification from /v/324142 game broadcasts (2026-05-18). **More authoritative than the wiki for new recipes.** |
+> | [`RECIPE_AUDIT.md`](./RECIPE_AUDIT.md) | Independent verification pass over the recipes in `RECIPES[]` against the wiki |
 > | [`REVIEW_FINDINGS.md`](./REVIEW_FINDINGS.md) | The 2026-05-17 audit + fix plan that drove v12.4.18–v12.4.20 |
+> | [`DOUBLE_TESSERACT_HUNT.md`](./DOUBLE_TESSERACT_HUNT.md) | Historical multi-agent hunt log. Some agent-sourced claims (Twitter handles, GitHub repos) unverified — treat with caution. |
 > | [`beetle_known_recipes_human_readable.md`](./beetle_known_recipes_human_readable.md) | Older recipe reference; first ~80 lines are the v12.4.18 delta block, rest is historical 2026-04-07 baseline |
 > | [`beetleboy_knowledge_base.md`](./beetleboy_knowledge_base.md) | Older game knowledge base; cross-check against `WIKI_AUDIT.md` for current facts |
-> | [`beetleboy_value_model.md`](./beetleboy_value_model.md) | Item-value math, EV reasoning for hammer choice |
+> | [`beetleboy_value_model.md`](./beetleboy_value_model.md) | Item-value math, EV reasoning for hammer choice, lanes, strategic state |
 >
 > **What's in the script post-v12.4.20 that this doc doesn't yet describe:**
 >
