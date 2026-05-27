@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.24
+// @version      12.4.25
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.24';
+  var VER = '12.4.25';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -61,6 +61,8 @@
     cucumber:'Striped Cucumber Beetle',bumblebee:'Bumblebee',
     blue_longicorn:'Black-Spotted Blue Longicorn',golden_tiger:'Golden-Spotted Tiger Beetle',
     death_feigning:'Blue Death Feigning Beetle',
+    // v12.4.25: Spring Swarm (v0.7 patch)
+    pondhawk:'Eastern Pondhawk',
     // Flowers
     daisy:'Daisy',poppy:'Poppy',sunflower:'Sunflower',marigold:'Marigold',
     gallic_rose:'Gallic Rose',milk_thistle:'Milk Thistle',royal_poinciana:'Royal Poinciana',
@@ -71,6 +73,8 @@
     st_johns_wort:"Spotted St. John's Wort",magnolia:'Southern Magnolia',
     fringed_iris:'Fringed Iris',larkspur:'Two-spike Larkspur',
     passionflower:'Purple Passionflower',
+    // v12.4.25: Spring Swarm
+    hellebore:'Green Hellebore',
     // Artifacts (5 original + Specimen Pin added v12.4.18)
     nectar:'Nectar',cattail:'Cattail',pinecone:'Pinecone',moss:'Moss',gunpowder:'Gunpowder',
     specimen_pin:'Specimen Pin',
@@ -109,6 +113,8 @@
     cucumber:'Bronze',bumblebee:'Rare',
     blue_longicorn:'Rare',golden_tiger:'Rare',
     death_feigning:'Epic',
+    // v12.4.25: Spring Swarm (recipe pattern matches Death Feigning — same Epic tier)
+    pondhawk:'Epic',
     daisy:'Tin',poppy:'Tin',sunflower:'Tin',
     marigold:'Bronze',gallic_rose:'Bronze',milk_thistle:'Bronze',
     royal_poinciana:'Mithril',camellia:'Mithril',morning_glory:'Mithril',
@@ -118,6 +124,8 @@
     st_johns_wort:'Bronze',magnolia:'Bronze',
     fringed_iris:'Mithril',larkspur:'Mithril',
     passionflower:'Adamantine',
+    // v12.4.25: Spring Swarm
+    hellebore:'Adamantine',
     pollen_tin:'Tin',pollen_bronze:'Bronze',pollen_mithril:'Mithril',pollen_adamantine:'Adamantine',
     nectar:'Bridge',cattail:'Bridge',pinecone:'Bridge',moss:'Bridge',gunpowder:'Bridge',
     specimen_pin:'Bridge'
@@ -149,14 +157,24 @@
     chinese_pink_carnation:'carnation',common_snapdragon:'snapdragon',
     large_white_petunia:'petunia',spotted_st_johns_wort:'st_johns_wort',
     southern_magnolia:'magnolia',two_spike_larkspur:'larkspur',
-    purple_passionflower:'passionflower'
+    purple_passionflower:'passionflower',
+    // v12.4.25: Spring Swarm aliases — game uses 'eastern_pondhawk' and
+    // 'green_hellebore' itemtags; canonical script keys are 'pondhawk' and
+    // 'hellebore'. Without these aliases the auto-scan would log them as
+    // unresolved + drop them from inventory tracking.
+    eastern_pondhawk:'pondhawk',green_hellebore:'hellebore'
   };
 
   // v12.4.18: flower lists updated per beetle.wiki itemtag_docs.
   var TIN_FLOWERS = ['daisy','poppy','sunflower','carnation','snapdragon','petunia'];
   var BRONZE_FLOWERS = ['marigold','gallic_rose','milk_thistle','st_johns_wort','magnolia'];
   var MITHRIL_FLOWERS = ['royal_poinciana','camellia','morning_glory','fringed_iris','larkspur'];
-  var ADAMANTINE_FLOWERS = ['pincushion','gazania','passionflower'];
+  // v12.4.25: hellebore added — Spring Swarm 4th Adamantine flower. Has
+  // downstream effects: Adamantine Pollen now has a 4-flower input pool,
+  // Adamantine Flower Reroll/Transmute outputs now include hellebore as
+  // a possible "(random sibling)". Adamantine Pollen recipe still works
+  // identically (any 2 from this pool).
+  var ADAMANTINE_FLOWERS = ['pincushion','gazania','passionflower','hellebore'];
   // BRONZE_BEETLES / MITHRIL_BEETLES intentionally exclude cucumber / bumblebee:
   // wiki: "Special beetles like Striped Cucumber Beetle and Bumblebee cannot be
   // transmuted into flowers." Likely they also can't be used in bridge recipes
@@ -208,11 +226,25 @@
   var ALL_BEETLES = ['green','ladybug','purple','pond','monarch','goliath','stag','bombardier',
     'giraffe_weevil','pillbug','imperial_tortoise','sabertooth_longhorn','sunset_moth',
     'mars_rhino','golden_scarab','hercules','skull','christmas',
-    'cucumber','bumblebee','blue_longicorn','golden_tiger','death_feigning'];
+    'cucumber','bumblebee','blue_longicorn','golden_tiger','death_feigning',
+    // v12.4.25: Spring Swarm (v0.7 patch) — first beetle confirmed by /v/411683
+    // broadcast: "YOU SACRIFICED A Purple Beetle AND SMASHED A Bombardier Beetle
+    // AND A Green Hellebore INTO A Eastern Pondhawk!" Wiki page exists at
+    // beetle.wiki/doku.php?id=beetle:pondhawk (created 2026-05-26). Sneed's
+    // RARITY data + recipe shape (Adamantine flower + Adamantine beetle, same as
+    // Death Feigning) suggest Epic tier output. Spring Swarm promised 6 new
+    // beetles total — only Pondhawk identified so far. `radbro` key exists in
+    // Sneed's NAMES map but no recipe/tier yet (likely upcoming).
+    'pondhawk'];
   var ALL_FLOWERS = ['daisy','poppy','sunflower','marigold','gallic_rose','milk_thistle',
     'royal_poinciana','camellia','morning_glory','pincushion','gazania','black_lotus',
     'carnation','snapdragon','petunia','st_johns_wort','magnolia',
-    'fringed_iris','larkspur','passionflower'];
+    'fringed_iris','larkspur','passionflower',
+    // v12.4.25: Spring Swarm flower #1 (huntable / drop-only — no craft recipe
+    // documented yet). Used as an input for Eastern Pondhawk smash. Sneed
+    // RARITY tags it 'adm' = Adamantine tier. 8 more Spring Swarm flowers
+    // promised but not yet exposed in wiki/Sneed data as of 2026-05-26.
+    'hellebore'];
   var COLLECTIBLES = new Set([].concat(ALL_BEETLES, ALL_FLOWERS));
 
   var RECIPES = [
@@ -260,6 +292,12 @@
     {label:'Black-Spotted Blue Longicorn',type:'smash',inputs:['fringed_iris','any_mithril_beetle']},
     {label:'Golden-Spotted Tiger Beetle',type:'smash',inputs:['larkspur','any_mithril_beetle']},
     {label:'Blue Death Feigning Beetle',type:'smash',inputs:['passionflower','any_adamantine_beetle']},
+    // v12.4.25: Spring Swarm — Eastern Pondhawk. Recipe shape mirrors Death
+    // Feigning (Adamantine flower + Adamantine beetle). Confirmed by /v/411683
+    // broadcast: "YOU SACRIFICED A Purple Beetle AND SMASHED A Bombardier Beetle
+    // AND A Green Hellebore INTO A Eastern Pondhawk!" Wiki also documents this
+    // recipe at beetle.wiki/doku.php?id=crafted_items (updated 2026-05-24).
+    {label:'Eastern Pondhawk',type:'smash',inputs:['hellebore','any_adamantine_beetle']},
     // v12.4.18: Transmute recipes rewritten to wiki-canonical 2-input form
     // (single beetle + Junk Cube → same-tier flower). Pre-v12.4.18 recipes used
     // a 3-input form (green + beetle + junk_cube) sourced from chat folklore
@@ -300,6 +338,9 @@
     'Sunset Moth (Stag)':78,'Sunset Moth (Bomb)':78,'Adamantine Pollen':75,'Adamantine Hammer':65,
     // v12.4.18: new special-beetle recipes
     'Blue Death Feigning Beetle':78,
+    // v12.4.25: Pondhawk — same tier/cost as Death Feigning (both consume an
+    // Adamantine flower + Adamantine beetle). Value 78 keeps them ranked equal.
+    'Eastern Pondhawk':78,
     'Black-Spotted Blue Longicorn':60,'Golden-Spotted Tiger Beetle':60,
     'Goliath Beetle':60,'Stag Beetle':60,
     'Bombardier Beetle':55,
@@ -333,7 +374,9 @@
     // v12.4.18: new special-beetle recipe outputs
     'Black-Spotted Blue Longicorn':'blue_longicorn',
     'Golden-Spotted Tiger Beetle':'golden_tiger',
-    'Blue Death Feigning Beetle':'death_feigning'
+    'Blue Death Feigning Beetle':'death_feigning',
+    // v12.4.25: Spring Swarm
+    'Eastern Pondhawk':'pondhawk'
   };
   var NEEDED_AS_INGREDIENT = new Set(['sabertooth_longhorn','sunset_moth','black_lotus']);
 
@@ -351,6 +394,9 @@
     'gazania':['Adamantine Flower Reroll','Adamantine Flower Transmute'],
     'pincushion':['Adamantine Flower Reroll','Adamantine Flower Transmute'],
     'passionflower':['Adamantine Flower Reroll','Adamantine Flower Transmute'],
+    // v12.4.25: hellebore — drop-only per wiki, but reroll/transmute now
+    // pool includes it as a random output. Same prereqs as the other 3.
+    'hellebore':['Adamantine Flower Reroll','Adamantine Flower Transmute'],
     // v12.4.21: Mithril Flower Reroll for new special flowers
     'fringed_iris':['Mithril Flower Reroll','Mithril Flower Transmute'],
     'larkspur':['Mithril Flower Reroll','Mithril Flower Transmute'],
@@ -1023,6 +1069,11 @@
     if (!(inv['blue_longicorn']||0)) { if (forOut === 'blue_longicorn') return false; if (key === 'fringed_iris' && (inv[key]||0) <= 1) return true; }
     if (!(inv['golden_tiger']||0)) { if (forOut === 'golden_tiger') return false; if (key === 'larkspur' && (inv[key]||0) <= 1) return true; }
     if (!(inv['death_feigning']||0)) { if (forOut === 'death_feigning') return false; if (key === 'passionflower' && (inv[key]||0) <= 1) return true; }
+    // v12.4.25: protect the last hellebore until pondhawk is collected.
+    // Without this, Adamantine Pollen / Adamantine Flower Transmute could
+    // consume the only hellebore the user owns, blocking the only known
+    // path to Eastern Pondhawk.
+    if (!(inv['pondhawk']||0)) { if (forOut === 'pondhawk') return false; if (key === 'hellebore' && (inv[key]||0) <= 1) return true; }
     return false;
   }
   function getDirectCrafts(inv) {
