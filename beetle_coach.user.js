@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.25
+// @version      12.4.26
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.25';
+  var VER = '12.4.26';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -99,7 +99,32 @@
     salt_pepper_packet:'Salt & Pepper Packet',scratch_off:'Scratch Off',sim_card:'SIM Card',
     smiley_pebble:'Smiley Pebble',soda_can_tab:'Soda Can Tab',stamp:'Stamp',
     train_ticket_stub:'Train Ticket Stub',watch_battery:'Watch Battery',wine_cork:'Wine Cork',
-    wristband:'Plastic Wristband'
+    wristband:'Plastic Wristband',
+    // v12.4.26: Trinket domain (14 items per wiki itemtag_docs + crafted_items).
+    // Trinkets are assemble-only crafts using junk cubes/tesseracts + pollen
+    // (Tier 1) or combinations of other trinkets (Tier 2+). The first craft
+    // of any trinket type also yields a corresponding Trophy (collectible).
+    // Subsequent crafts yield only the trinket. Trophies feed CULT tier
+    // progression — high collection value per profile-page evidence.
+    chinese_coin:'Chinese Coin',prism:'Prism',roman_dodeca:'Roman Dodecahedron',
+    arrowhead:'Arrowhead',titanium_cube:'Titanium Cube',oriental_fan:'Oriental Fan',
+    jade_cabbage:'Jade Cabbage',cult_medallion:'CULT Medallion',stradivarius:'Stradivarius',
+    thumb_drive:'Thumb Drive',mokia:'Mokia',juex_card:'Juex Card',compass:'Compass',
+    milady_fumoku:'Milady Fumoku',
+    // Huntable trophies (drop-only per wiki, can't be crafted)
+    deck_of_cards:'Deck of Cards',d20:'D20',engraved_lighter:'Engraved Lighter',
+    // Trophy variants — one per trinket. The trophy_<key> form matches the
+    // game's itemtag convention (per Agent 1 wiki audit of itemtag_docs).
+    trophy_chinese_coin:'Chinese Coin Trophy',trophy_prism:'Prism Trophy',
+    trophy_roman_dodeca:'Roman Dodecahedron Trophy',trophy_arrowhead:'Arrowhead Trophy',
+    trophy_titanium_cube:'Titanium Cube Trophy',trophy_oriental_fan:'Oriental Fan Trophy',
+    trophy_jade_cabbage:'Jade Cabbage Trophy',trophy_cult_medallion:'CULT Medallion Trophy',
+    trophy_stradivarius:'Stradivarius Trophy',trophy_thumb_drive:'Thumb Drive Trophy',
+    trophy_mokia:'Mokia Trophy',trophy_juex_card:'Juex Card Trophy',
+    trophy_compass:'Compass Trophy',trophy_milady_fumoku:'Milady Fumoku Trophy',
+    trophy_deck_of_cards:'Deck of Cards Trophy',trophy_d20:'D20 Trophy',
+    trophy_engraved_lighter:'Engraved Lighter Trophy',trophy_goya_miniature:'Goya Miniature Trophy',
+    trophy_police_badge:'Police Badge Trophy',trophy_remilianet_id:'RemiNET ID Trophy'
   };
 
   var TIER_MAP = {
@@ -128,12 +153,27 @@
     hellebore:'Adamantine',
     pollen_tin:'Tin',pollen_bronze:'Bronze',pollen_mithril:'Mithril',pollen_adamantine:'Adamantine',
     nectar:'Bridge',cattail:'Bridge',pinecone:'Bridge',moss:'Bridge',gunpowder:'Bridge',
-    specimen_pin:'Bridge'
+    specimen_pin:'Bridge',
+    // v12.4.26: trinket tier (cyan badge) for crafted trinkets, trophy tier
+    // (gold badge) for the collectible trophy variants.
+    chinese_coin:'Trinket',prism:'Trinket',roman_dodeca:'Trinket',arrowhead:'Trinket',
+    titanium_cube:'Trinket',oriental_fan:'Trinket',jade_cabbage:'Trinket',
+    cult_medallion:'Trinket',stradivarius:'Trinket',thumb_drive:'Trinket',
+    mokia:'Trinket',juex_card:'Trinket',compass:'Trinket',milady_fumoku:'Trinket',
+    deck_of_cards:'Trinket',d20:'Trinket',engraved_lighter:'Trinket',
+    trophy_chinese_coin:'Trophy',trophy_prism:'Trophy',trophy_roman_dodeca:'Trophy',
+    trophy_arrowhead:'Trophy',trophy_titanium_cube:'Trophy',trophy_oriental_fan:'Trophy',
+    trophy_jade_cabbage:'Trophy',trophy_cult_medallion:'Trophy',trophy_stradivarius:'Trophy',
+    trophy_thumb_drive:'Trophy',trophy_mokia:'Trophy',trophy_juex_card:'Trophy',
+    trophy_compass:'Trophy',trophy_milady_fumoku:'Trophy',trophy_deck_of_cards:'Trophy',
+    trophy_d20:'Trophy',trophy_engraved_lighter:'Trophy',trophy_goya_miniature:'Trophy',
+    trophy_police_badge:'Trophy',trophy_remilianet_id:'Trophy'
   };
   var TIER_COLORS = {
     Tin:'#7a8a7a',Bronze:'#b87333',Mithril:'#5b8dd9',Adamantine:'#9b59b6',
     Rare:'#e67e22',Epic:'#e74c3c',Legendary:'#f1c40f',Bridge:'#1abc9c',
-    Uncommon:'#6a9955',Special:'#e84393'
+    Uncommon:'#6a9955',Special:'#e84393',
+    Trinket:'#06b6d4',Trophy:'#f59e0b'
   };
 
   var ITEM_ALIASES = {
@@ -162,7 +202,14 @@
     // 'green_hellebore' itemtags; canonical script keys are 'pondhawk' and
     // 'hellebore'. Without these aliases the auto-scan would log them as
     // unresolved + drop them from inventory tracking.
-    eastern_pondhawk:'pondhawk',green_hellebore:'hellebore'
+    eastern_pondhawk:'pondhawk',green_hellebore:'hellebore',
+    // v12.4.26: Trinket aliases. Game itemtag for Roman Dodecahedron is the
+    // full word; script uses the abbreviated 'roman_dodeca'. Other trinkets
+    // mostly match itemtag conventions but include aliases for safety against
+    // long-form variants.
+    roman_dodecahedron:'roman_dodeca',cult_medallion_trinket:'cult_medallion',
+    // RemiNET ID uses 'remilianet_id' in wiki itemtags (no recipe — drop only)
+    remilianet_id:'trophy_remilianet_id'
   };
 
   // v12.4.18: flower lists updated per beetle.wiki itemtag_docs.
@@ -330,7 +377,43 @@
     // target but real distribution is much wider. See V_THREAD_FINDINGS.md.
     // Moderate RECIPE_VALUE (30) so it surfaces as a backup option but
     // doesn't dominate purposeful crafts.
-    {label:'Junk Tesseract Gamble',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2']}
+    {label:'Junk Tesseract Gamble',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2']},
+    // ─── v12.4.26: Trinket recipes ────────────────────────────────────────────
+    // 14 confirmed deterministic assembles per beetle.wiki/crafted_items.
+    // Each first-craft yields a Trophy variant (collectible); subsequent
+    // crafts yield the trinket itself (used as input for higher trinkets).
+    // Trophies feed CULT tier progression — high value pre-trophy, lower
+    // post-trophy. BC currently models the trinket as the output regardless;
+    // future revision can flip to dynamic output based on trophy_X ownership.
+    //
+    // Tier 1 (Junk Cube/Tesseract + Pollen → seed trinkets):
+    {label:'Chinese Coin',type:'assemble',inputs:['junk_cube_t1','junk_cube_t1','pollen_tin']},
+    {label:'Prism',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_tin']},
+    {label:'Roman Dodecahedron',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_bronze']},
+    {label:'Arrowhead',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_mithril']},
+    {label:'Titanium Cube',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_adamantine']},
+    // Tier 2 (Trinket + Pollen / Trinket + Trinket → mid-tier trinkets):
+    // Oriental Fan: wiki sources show "Chinese Coin + Tin Pollen" OR "+ Bronze
+    // Pollen" — going with Tin per first source; will swap if Bronze proves
+    // canonical via in-game test.
+    {label:'Oriental Fan',type:'assemble',inputs:['chinese_coin','pollen_tin']},
+    // Jade Cabbage: wiki AMBIGUOUS — one source "Chinese Coin + Juex Card",
+    // another "Chinese Coin + Roman Dodecahedron". Going with the latter
+    // because it matches the Tier 2 pattern of combining two seed trinkets;
+    // Juex Card is itself Tier 2 so the first form would be a Tier 3.
+    {label:'Jade Cabbage',type:'assemble',inputs:['chinese_coin','roman_dodeca']},
+    {label:'Stradivarius',type:'assemble',inputs:['roman_dodeca','prism']},
+    {label:'Thumb Drive',type:'assemble',inputs:['roman_dodeca','arrowhead']},
+    {label:'Mokia',type:'assemble',inputs:['roman_dodeca','titanium_cube']},
+    {label:'Juex Card',type:'assemble',inputs:['prism','titanium_cube']},
+    {label:'Police Badge',type:'assemble',inputs:['arrowhead','titanium_cube']},
+    // Tier 3 (combinations of Tier 2 trinkets):
+    {label:'CULT Medallion',type:'assemble',inputs:['oriental_fan','jade_cabbage']},
+    {label:'Goya Miniature',type:'assemble',inputs:['arrowhead','stradivarius']},
+    {label:'RemiNET ID',type:'assemble',inputs:['deck_of_cards','thumb_drive']}
+    // Engraved Lighter: recipe unknown per wiki — not added.
+    // Milady Fumoku: wiki shows "Juex Card + Milady Fumoku" which is circular
+    // (probably typo). Not added until canonical recipe is found.
   ];
   var RECIPE_VALUE = {
     'Hercules Beetle':100,'Mars Rhino Beetle':95,'Black Lotus':88,'Diamond Hammer':82,
@@ -359,7 +442,21 @@
     'Tin Flower Reroll':4,'Bronze Flower Reroll':10,'Mithril Flower Reroll':40,
     'Adamantine Flower Reroll':60,
     'Junk Tesseract Gamble':30,
-    'Junk Tesseract':8,'Tin Hammer':6,'Tin Pollen':5,'Junk Cube':1
+    'Junk Tesseract':8,'Tin Hammer':6,'Tin Pollen':5,'Junk Cube':1,
+    // v12.4.26: Trinket recipe values. Higher than beetles/flowers because:
+    //   (a) First craft yields a Trophy — feeds CULT tier progression (the
+    //       user's profile shows CULT HELD 40226816, a meaningful metric).
+    //   (b) Trinket-chain crafts gate higher-tier trinkets (CULT Medallion
+    //       requires Oriental Fan + Jade Cabbage, both of which need Chinese
+    //       Coin first).
+    // Values graduate by chain depth: seed trinkets 65 (need basic inputs);
+    // mid-tier 75-80 (consume seed trinkets, harder to make); top-tier 90
+    // (CULT Medallion is the apex 3-level chain).
+    'Chinese Coin':65,'Prism':65,'Roman Dodecahedron':70,
+    'Arrowhead':70,'Titanium Cube':75,
+    'Oriental Fan':75,'Jade Cabbage':78,'Stradivarius':80,'Thumb Drive':80,
+    'Mokia':82,'Juex Card':82,'Police Badge':82,
+    'CULT Medallion':90,'Goya Miniature':85,'RemiNET ID':85
   };
   var RECIPE_OUTPUT = {
     'Pond Beetle':'pond','Monarch':'monarch',
@@ -376,7 +473,18 @@
     'Golden-Spotted Tiger Beetle':'golden_tiger',
     'Blue Death Feigning Beetle':'death_feigning',
     // v12.4.25: Spring Swarm
-    'Eastern Pondhawk':'pondhawk'
+    'Eastern Pondhawk':'pondhawk',
+    // v12.4.26: Trinket recipe outputs. First craft also yields trophy_<key>
+    // — not modeled here yet; the static map says trinket. To prioritize the
+    // trophy variant when not yet collected, getProgressionMove could check
+    // trophy_<key> ownership and adjust.
+    'Chinese Coin':'chinese_coin','Prism':'prism','Roman Dodecahedron':'roman_dodeca',
+    'Arrowhead':'arrowhead','Titanium Cube':'titanium_cube',
+    'Oriental Fan':'oriental_fan','Jade Cabbage':'jade_cabbage',
+    'Stradivarius':'stradivarius','Thumb Drive':'thumb_drive',
+    'Mokia':'mokia','Juex Card':'juex_card','Police Badge':'police_badge',
+    'CULT Medallion':'cult_medallion','Goya Miniature':'goya_miniature',
+    'RemiNET ID':'remilianet_id'
   };
   var NEEDED_AS_INGREDIENT = new Set(['sabertooth_longhorn','sunset_moth','black_lotus']);
 
@@ -401,7 +509,18 @@
     'fringed_iris':['Mithril Flower Reroll','Mithril Flower Transmute'],
     'larkspur':['Mithril Flower Reroll','Mithril Flower Transmute'],
     'any_adamantine_beetle':['Goliath Beetle','Stag Beetle','Bombardier Beetle'],
-    'junk_cube_t1':['Junk Cube'],'junk_cube_t2':['Junk Tesseract']
+    'junk_cube_t1':['Junk Cube'],'junk_cube_t2':['Junk Tesseract'],
+    // v12.4.26: Trinket chain prereqs. When the bot wants to make a higher
+    // trinket, it'll first craft the seed trinkets needed.
+    'chinese_coin':['Chinese Coin'],
+    'prism':['Prism'],
+    'roman_dodeca':['Roman Dodecahedron'],
+    'arrowhead':['Arrowhead'],
+    'titanium_cube':['Titanium Cube'],
+    'oriental_fan':['Oriental Fan'],
+    'jade_cabbage':['Jade Cabbage'],
+    'stradivarius':['Stradivarius'],
+    'thumb_drive':['Thumb Drive']
   };
 
   var STAGES = [
