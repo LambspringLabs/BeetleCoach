@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.26
+// @version      12.4.27
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.26';
+  var VER = '12.4.27';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -138,8 +138,12 @@
     cucumber:'Bronze',bumblebee:'Rare',
     blue_longicorn:'Rare',golden_tiger:'Rare',
     death_feigning:'Epic',
-    // v12.4.25: Spring Swarm (recipe pattern matches Death Feigning — same Epic tier)
-    pondhawk:'Epic',
+    // v12.4.25 → v12.4.27: Pondhawk's tier was Epic in v12.4.25 (guessed from
+    // recipe-shape similarity to Death Feigning); Sneed data.js RARITY shows
+    // pondhawk:'adm' = Adamantine. Confirms Pondhawk is an alternative-tier
+    // beetle, NOT a higher-tier output. Means it should also feed the
+    // any_adamantine_beetle slot for downstream recipes.
+    pondhawk:'Adamantine',
     daisy:'Tin',poppy:'Tin',sunflower:'Tin',
     marigold:'Bronze',gallic_rose:'Bronze',milk_thistle:'Bronze',
     royal_poinciana:'Mithril',camellia:'Mithril',morning_glory:'Mithril',
@@ -228,7 +232,12 @@
   // (unverified). Keep them out until in-game testing confirms otherwise.
   var BRONZE_BEETLES = ['ladybug','purple'];
   var MITHRIL_BEETLES = ['pond','monarch'];
-  var ADAMANTINE_BEETLES = ['goliath','stag','bombardier'];
+  // v12.4.27: pondhawk added — Sneed RARITY confirms Adamantine tier. Means
+  // Pondhawk can substitute for Goliath/Stag/Bombardier in downstream recipes
+  // (Sabertooth, Sunset Moth, Death Feigning, Adamantine Pollen via Pollen
+  // recipes, etc.) and unlocks recursive Pondhawk crafting via its own
+  // Hellebore + any_adamantine_beetle recipe.
+  var ADAMANTINE_BEETLES = ['goliath','stag','bombardier','pondhawk'];
   // v12.4.18: junk list updated per beetle.wiki itemtag_docs (45 items, was 27).
   var ANY_JUNK = [
     'ballpoint_pen','bendy_straw','bike_reflector','bottle_cap','broken_firework',
@@ -378,42 +387,50 @@
     // Moderate RECIPE_VALUE (30) so it surfaces as a backup option but
     // doesn't dominate purposeful crafts.
     {label:'Junk Tesseract Gamble',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2']},
-    // ─── v12.4.26: Trinket recipes ────────────────────────────────────────────
-    // 14 confirmed deterministic assembles per beetle.wiki/crafted_items.
-    // Each first-craft yields a Trophy variant (collectible); subsequent
-    // crafts yield the trinket itself (used as input for higher trinkets).
-    // Trophies feed CULT tier progression — high value pre-trophy, lower
-    // post-trophy. BC currently models the trinket as the output regardless;
-    // future revision can flip to dynamic output based on trophy_X ownership.
+    // ─── v12.4.27: Trinket recipes (rewritten against Sneed's data.js AR map) ──
+    // v12.4.26 sourced these from the wiki, which had several recipes wrong.
+    // Sneed's data.js is the canonical authoritative recipe table — Sneed's
+    // BeetleBoy SP at beetle.sevensevenseven.net mirrors the game's recipe
+    // logic verbatim. Confirmed corrections in v12.4.27:
+    //   - Stradivarius: was roman_dodeca+prism → actually jade_cabbage+oriental_fan
+    //   - Thumb Drive: was roman_dodeca+arrowhead → actually roman_dodeca+prism
+    //   - CULT Medallion: was oriental_fan+jade_cabbage → actually juex_card+chinese_coin
+    //   - RemiNET ID: was deck_of_cards+thumb_drive → actually juex_card+milady_fumoku
+    //   - Compass: ADDED (arrowhead+roman_dodeca)
+    //   - Milady Fumoku: ADDED (cult_medallion+arrowhead) — resolves the wiki's
+    //     circular "Juex Card + Milady Fumoku" typo
     //
-    // Tier 1 (Junk Cube/Tesseract + Pollen → seed trinkets):
+    // First craft of each yields a trophy_<key> variant (collectible, feeds
+    // CULT tier); subsequent crafts yield the trinket. RECIPE_OUTPUT maps to
+    // the trinket key regardless of trophy ownership; dynamic prioritization
+    // based on trophy_<key> ownership is a future revision.
+    //
+    // Tier 1 (Junk + Pollen → seed trinkets):
     {label:'Chinese Coin',type:'assemble',inputs:['junk_cube_t1','junk_cube_t1','pollen_tin']},
     {label:'Prism',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_tin']},
     {label:'Roman Dodecahedron',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_bronze']},
     {label:'Arrowhead',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_mithril']},
     {label:'Titanium Cube',type:'assemble',inputs:['junk_cube_t2','junk_cube_t2','pollen_adamantine']},
-    // Tier 2 (Trinket + Pollen / Trinket + Trinket → mid-tier trinkets):
-    // Oriental Fan: wiki sources show "Chinese Coin + Tin Pollen" OR "+ Bronze
-    // Pollen" — going with Tin per first source; will swap if Bronze proves
-    // canonical via in-game test.
+    // Tier 2 (seed trinket + seed trinket / seed trinket + pollen):
+    // Oriental Fan: Sneed shows asymmetric recipe — TROPHY uses pollen_tin
+    // (common), TRINKET uses pollen_bronze (uncommon). v12.4.27 keeps the
+    // trophy-form here since first-craft is high-value; subsequent crafts
+    // can use the Bronze pollen path manually until we wire dynamic outputs.
     {label:'Oriental Fan',type:'assemble',inputs:['chinese_coin','pollen_tin']},
-    // Jade Cabbage: wiki AMBIGUOUS — one source "Chinese Coin + Juex Card",
-    // another "Chinese Coin + Roman Dodecahedron". Going with the latter
-    // because it matches the Tier 2 pattern of combining two seed trinkets;
-    // Juex Card is itself Tier 2 so the first form would be a Tier 3.
     {label:'Jade Cabbage',type:'assemble',inputs:['chinese_coin','roman_dodeca']},
-    {label:'Stradivarius',type:'assemble',inputs:['roman_dodeca','prism']},
-    {label:'Thumb Drive',type:'assemble',inputs:['roman_dodeca','arrowhead']},
+    {label:'Thumb Drive',type:'assemble',inputs:['roman_dodeca','prism']},
     {label:'Mokia',type:'assemble',inputs:['roman_dodeca','titanium_cube']},
+    {label:'Compass',type:'assemble',inputs:['arrowhead','roman_dodeca']},
     {label:'Juex Card',type:'assemble',inputs:['prism','titanium_cube']},
     {label:'Police Badge',type:'assemble',inputs:['arrowhead','titanium_cube']},
-    // Tier 3 (combinations of Tier 2 trinkets):
-    {label:'CULT Medallion',type:'assemble',inputs:['oriental_fan','jade_cabbage']},
-    {label:'Goya Miniature',type:'assemble',inputs:['arrowhead','stradivarius']},
-    {label:'RemiNET ID',type:'assemble',inputs:['deck_of_cards','thumb_drive']}
-    // Engraved Lighter: recipe unknown per wiki — not added.
-    // Milady Fumoku: wiki shows "Juex Card + Milady Fumoku" which is circular
-    // (probably typo). Not added until canonical recipe is found.
+    // Tier 3 (mid trinket combos):
+    {label:'Stradivarius',type:'assemble',inputs:['jade_cabbage','oriental_fan']},
+    {label:'CULT Medallion',type:'assemble',inputs:['juex_card','chinese_coin']},
+    {label:'Goya Miniature',type:'assemble',inputs:['stradivarius','arrowhead']},
+    // Tier 4 (top combos):
+    {label:'Milady Fumoku',type:'assemble',inputs:['cult_medallion','arrowhead']},
+    {label:'RemiNET ID',type:'assemble',inputs:['juex_card','milady_fumoku']}
+    // Engraved Lighter: confirmed drop-only across all sources — no recipe.
   ];
   var RECIPE_VALUE = {
     'Hercules Beetle':100,'Mars Rhino Beetle':95,'Black Lotus':88,'Diamond Hammer':82,
@@ -454,9 +471,15 @@
     // (CULT Medallion is the apex 3-level chain).
     'Chinese Coin':65,'Prism':65,'Roman Dodecahedron':70,
     'Arrowhead':70,'Titanium Cube':75,
-    'Oriental Fan':75,'Jade Cabbage':78,'Stradivarius':80,'Thumb Drive':80,
-    'Mokia':82,'Juex Card':82,'Police Badge':82,
-    'CULT Medallion':90,'Goya Miniature':85,'RemiNET ID':85
+    'Oriental Fan':75,'Jade Cabbage':78,'Thumb Drive':78,'Mokia':80,
+    // v12.4.27: Compass + Milady Fumoku added. Position Compass at mid-tier
+    // (same as Thumb Drive — both are Arrowhead-based). Milady Fumoku
+    // is Tier 4 (highest depth) so set value high.
+    'Compass':78,
+    'Juex Card':82,'Police Badge':82,
+    'Stradivarius':85,'CULT Medallion':88,
+    'Goya Miniature':85,
+    'Milady Fumoku':92,'RemiNET ID':92
   };
   var RECIPE_OUTPUT = {
     'Pond Beetle':'pond','Monarch':'monarch',
@@ -484,7 +507,9 @@
     'Stradivarius':'stradivarius','Thumb Drive':'thumb_drive',
     'Mokia':'mokia','Juex Card':'juex_card','Police Badge':'police_badge',
     'CULT Medallion':'cult_medallion','Goya Miniature':'goya_miniature',
-    'RemiNET ID':'remilianet_id'
+    'RemiNET ID':'remilianet_id',
+    // v12.4.27 additions
+    'Compass':'compass','Milady Fumoku':'milady_fumoku'
   };
   var NEEDED_AS_INGREDIENT = new Set(['sabertooth_longhorn','sunset_moth','black_lotus']);
 
@@ -510,8 +535,10 @@
     'larkspur':['Mithril Flower Reroll','Mithril Flower Transmute'],
     'any_adamantine_beetle':['Goliath Beetle','Stag Beetle','Bombardier Beetle'],
     'junk_cube_t1':['Junk Cube'],'junk_cube_t2':['Junk Tesseract'],
-    // v12.4.26: Trinket chain prereqs. When the bot wants to make a higher
-    // trinket, it'll first craft the seed trinkets needed.
+    // v12.4.26→v12.4.27: Trinket chain prereqs rebuilt against Sneed's AR map.
+    // Lets the bot derive multi-step crafting paths (e.g. "want CULT Medallion
+    // → need Juex Card → need Prism + Titanium Cube → need Junk Tesseracts +
+    // pollens...").
     'chinese_coin':['Chinese Coin'],
     'prism':['Prism'],
     'roman_dodeca':['Roman Dodecahedron'],
@@ -519,8 +546,15 @@
     'titanium_cube':['Titanium Cube'],
     'oriental_fan':['Oriental Fan'],
     'jade_cabbage':['Jade Cabbage'],
+    'thumb_drive':['Thumb Drive'],
+    'mokia':['Mokia'],
+    'compass':['Compass'],
+    'juex_card':['Juex Card'],
+    'police_badge':['Police Badge'],
     'stradivarius':['Stradivarius'],
-    'thumb_drive':['Thumb Drive']
+    'cult_medallion':['CULT Medallion'],
+    'goya_miniature':['Goya Miniature'],
+    'milady_fumoku':['Milady Fumoku']
   };
 
   var STAGES = [
