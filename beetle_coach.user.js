@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remilia Beetle Coach
 // @namespace    http://tampermonkey.net/
-// @version      12.4.27
+// @version      12.4.28
 // @description  BeetleBoy coach: state-machine automation, auto-claim/hunt/cheese, auto-login, smart pathways.
 // @match        https://www.remilia.net/*
 // @grant        GM_getValue
@@ -28,7 +28,7 @@
   /* ═══════════════════════════════════════════════════════
      1. CONFIG
      ═══════════════════════════════════════════════════════ */
-  var VER = '12.4.27';
+  var VER = '12.4.28';
   var STORE_KEY = 'beetle_coach_v8_store';
   var PANEL_ID = 'bc8-panel';
   var BTN_ID = 'bc8-toggle';
@@ -624,6 +624,68 @@
   ]);
   var BLOCKLIST = /^(svg|icon|button|slot|empty|more|smash|eject|assemble|home|search|left|right|go_back|show_password|claim|load|logo|dots|arrow|cheeseman|static\d*|beetleboy_logo|beetle_catch|craft|beetle_shader)$/i;
   var PFP_HASH = /^(pfp_\d+|retart|remilio|radbro|default|[a-f0-9]{20,})$/i;
+
+  /* ═══════════════════════════════════════════════════════
+     2.9. SPECIMEN PIN BEETLE TROPHY GENERATOR (v12.4.28)
+     ═══════════════════════════════════════════════════════
+     The game's Specimen Pin Trophy creator yields a per-beetle output:
+     `Specimen Pin + <beetle>` smash → `trophy_<beetle>` (with an implicit
+     Green Beetle sacrifice). Confirmed by Sneed's data.js AR entry:
+       ['Specimen Pin + Any Beetle', "That Beetle's Trophy", 'smash']
+     and by /v/411231 broadcast:
+       "SACRIFICED A Green Beetle AND SMASHED A Specimen Pin AND A Mars
+        Rhino Beetle INTO A Mars Rhino Beetle Trophy!"
+
+     We can't encode dynamic output in one static recipe, so we expand into
+     N recipes (one per beetle). Generator also:
+       1. Adds `trophy_<beetle>` to LABELS so the panel renders names
+       2. Adds `trophy_<beetle>` to TIER_MAP with Trophy tier
+       3. Adds `trophy_<beetle>` to COLLECTIBLES so wouldConsumeLastCollectible
+          correctly treats the trophy as "makes new" — without this, the
+          recipe would be blocked any time the user has only 1 of the input
+          beetle (which is common for rare beetles)
+       4. Adds the trinket trophies (v12.4.26-added chinese_coin trophies,
+          etc.) to COLLECTIBLES too — same protection-logic concern
+
+     RECIPE_VALUE is graded by beetle tier — Legendary beetles get the
+     highest value (rare Specimen Pin is best spent on the rarest output).
+  */
+  (function generateSpecimenPinTrophyRecipes() {
+    var beetleTrophyValueByTier = {
+      Tin: 45, Bronze: 55, Mithril: 65, Adamantine: 75,
+      Rare: 85, Epic: 95, Legendary: 100,
+      Uncommon: 85, Special: 90
+    };
+    ALL_BEETLES.forEach(function(beetle) {
+      // Skip hercules per Sneed verification — beetle doesn't exist
+      if (beetle === 'hercules') return;
+      var beetleName = LABELS[beetle] || beetle;
+      var trophyKey = 'trophy_' + beetle;
+      var recipeLabel = 'Beetle Trophy: ' + beetleName;
+      LABELS[trophyKey] = beetleName + ' Trophy';
+      TIER_MAP[trophyKey] = 'Trophy';
+      COLLECTIBLES.add(trophyKey);
+      var tier = TIER_MAP[beetle] || 'Bronze';
+      var value = beetleTrophyValueByTier[tier] || 60;
+      RECIPES.push({
+        label: recipeLabel, type: 'smash',
+        inputs: ['specimen_pin', beetle]
+      });
+      RECIPE_OUTPUT[recipeLabel] = trophyKey;
+      RECIPE_VALUE[recipeLabel] = value;
+    });
+    // v12.4.28: trinket trophies (from v12.4.26-27) need COLLECTIBLES
+    // membership too — without this, multi-trinket-input recipes (e.g.,
+    // CULT Medallion needs Juex Card + Chinese Coin) could be blocked when
+    // the user has only 1 of an input trinket.
+    [
+      'chinese_coin','prism','roman_dodeca','arrowhead','titanium_cube',
+      'oriental_fan','jade_cabbage','thumb_drive','mokia','compass',
+      'juex_card','police_badge','stradivarius','cult_medallion',
+      'goya_miniature','milady_fumoku','remilianet_id',
+      'deck_of_cards','d20','engraved_lighter'
+    ].forEach(function(k) { COLLECTIBLES.add('trophy_' + k); });
+  })();
 
   /* ═══════════════════════════════════════════════════════
      3. HELPERS
